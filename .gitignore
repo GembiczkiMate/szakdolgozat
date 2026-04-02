@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.vscode
+build/
+install/
+log/
+
+# Egy konkrét fájl kihagyása
+to_do.txt

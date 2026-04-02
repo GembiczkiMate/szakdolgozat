@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<robot name="simple_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <material name="acrylic"><color rgba="0.9 0.9 1.0 0.4"/></material>
+  <material name="black"><color rgba="0.0 0.0 0.0 1.0"/></material>
+  <material name="yellow"><color rgba="1.0 0.8 0.0 1.0"/></material>
+  <material name="red"><color rgba="0.8 0.0 0.0 1.0"/></material>
+  <link name="base_link">
+    <visual><geometry><box size="0.3 0.2 0.05"/></geometry><material name="acrylic"/><origin xyz="0 0 0.05" rpy="0 0 0"/></visual>
+    <collision><geometry><box size="0.3 0.2 0.05"/></geometry><origin xyz="0 0 0.05" rpy="0 0 0"/></collision>
+    <inertial><mass value="1.0"/><inertia ixx="0.01" ixy="0.0" ixz="0.0" iyy="0.01" iyz="0.0" izz="0.01"/></inertial>
+  </link>
+
+  <link name="left_wheel">
+    <visual><geometry><cylinder length="0.02" radius="0.05"/></geometry></visual>
+    <collision><geometry><cylinder length="0.02" radius="0.05"/></geometry><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+    <inertial><mass value="0.2"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+ 
+  <inertial><mass value="0.2"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+</link>
+
+<joint name="left_wheel_joint" type="continuous"><parent link="base_link"/><child link="left_wheel"/><origin xyz="0.05 0.11 0.035" rpy="-1.5708 0 0"/><axis xyz="0 0 1"/></joint>
+
+<link name="right_wheel">
+
+    <visual><geometry><cylinder length="0.02" radius="0.05"/></geometry></visual>
+    <collision><geometry><cylinder length="0.02" radius="0.05"/></geometry><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+    <inertial><mass value="0.2"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+  </link>
+  
+  <joint name="right_wheel_joint" type="continuous"><parent link="base_link"/><child link="right_wheel"/><origin xyz="0.05 -0.11 0.035" rpy="-1.5708 0 0"/><axis xyz="0 0 1"/></joint>
+  <link name="caster_wheel">
+
+    <visual><geometry><sphere radius="0.035"/></geometry></visual>
+    <collision><geometry><sphere radius="0.035"/></geometry><surface><friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction></surface></collision>
+    <inertial><mass value="0.1"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+  </link>
+
+  
+  <joint name="caster_joint" type="fixed"><parent link="base_link"/><child link="caster_wheel"/><origin xyz="-0.1 0 0.025" rpy="0 0.4 0"/></joint>
+  
+  <link name="camera_link">
+    <visual><geometry><box size="0.02 0.02 0.02"/></geometry></visual>
+    <collision><geometry><box size="0.02 0.02 0.02"/></geometry></collision>
+    <inertial><mass value="0.05"/><inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/></inertial>
+  </link>
+
+  <joint name="camera_joint" type="fixed"><parent link="base_link"/><child link="camera_link"/><origin xyz="0.16 0 0.08" rpy="0 0.0 0"/></joint>
+  
+  <gazebo reference="camera_link">
+    <sensor type="camera" name="line_camera">
+      <update_rate>10.0</update_rate>
+      <camera name="head">
+      <horizontal_fov>1.396</horizontal_fov>
+      <image>
+      <width>320</width><height>240</height>
+      <format>R8G8B8</format>
+      </image>
+      <clip><near>0.02</near><far>10</far></clip></camera>
+      <plugin name="camera_controller" filename="libgazebo_ros_camera.so">
+        <alwaysOn>true</alwaysOn><updateRate>0.0</updateRate><cameraName>camera</cameraName><imageTopicName>image_raw</imageTopicName><frameName>camera_link</frameName><hackBaseline>0.07</hackBaseline>
+      </plugin>
+    </sensor>
+    
+  </gazebo>
+  <gazebo>
+    <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so"><ros><namespace>/</namespace></ros><left_joint>left_wheel_joint</left_joint><right_joint>right_wheel_joint</right_joint><wheel_separation>0.22</wheel_separation><wheel_diameter>0.07</wheel_diameter><max_wheel_torque>10</max_wheel_torque><max_wheel_acceleration>1.0</max_wheel_acceleration><publish_odom>true</publish_odom><publish_odom_tf>true</publish_odom_tf><publish_wheel_tf>true</publish_wheel_tf><odometry_frame>odom</odometry_frame><robot_base_frame>base_link</robot_base_frame></plugin>
+  </gazebo>
+</robot>
