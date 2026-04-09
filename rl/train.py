@@ -11,7 +11,7 @@ import torch
 # ============================================================================
 
 # --- Training Parameters ---
-TOTAL_TIMESTEPS = 5000       # Total training steps (Must be larger than n_steps to log anything!)
+TOTAL_TIMESTEPS = 10000       # Total training steps (Must be larger than n_steps to log anything!)
 LOG_INTERVAL = 1              # Log every N episodes
 
 # --- PPO Algorithm Parameters ---
@@ -33,8 +33,8 @@ PPO_HYPERPARAMS = {
 # Then uses fully connected layers for policy and value heads
 POLICY_KWARGS = {
     "net_arch": dict(
-        pi=[256, 128],        # Policy network after CNN features
-        vf=[256, 128]         # Value network after CNN features
+        pi=[64, 64],        # Policy network after CNN features
+        vf=[64, 64]         # Value network after CNN features
     ),
     # Use smaller CNN for 84x84 grayscale images (faster training)
     "features_extractor_kwargs": {

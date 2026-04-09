@@ -41,7 +41,8 @@ rosdep update
 echo "[5/6] Python ML/RL keretrendszerek telepítése (PyTorch, Stable-Baselines3, Gym)..."
 # ROS 2 környezetben a pip csomagokat érdemes felhasználói (-user) szintre tenni, hogy ne akadjanak össze az apt-tal
 pip3 install --user torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip3 install --user stable-baselines3 gymnasium opencv-python tensorboard numpy matplotlib
+# Kifejezetten a numpy < 2.0.0 kötelező a ROS 2 és a Stable Baselines 3 kompatibilitási hibáinak elkerüléséhez!
+pip3 install --user stable-baselines3 gymnasium opencv-python tensorboard "numpy<2.0.0" matplotlib
 
 # 6. Környezeti változók Bashrc-be írása
 echo "[6/6] .bashrc konfigurálása..."
@@ -50,13 +51,30 @@ if ! grep -q "source /opt/ros/humble/setup.bash" ~/.bashrc; then
   echo "ROS 2 Humble környezet hozzáadva a ~/.bashrc fájlhoz."
 fi
 
+# Fontos: A Colcon fordítás (ament_cmake) számára be kell tölteni a ROS környezetet a fordítás ELŐTT is!
+source /opt/ros/humble/setup.bash
+
+# A Cyclone DDS hálózati javítás telepítése, ami elengedhetetlen a stabil RL tanításhoz!
+echo "A Cyclone DDS csomagok telepítése..."
+sudo apt install -y ros-humble-rmw-cyclonedds-cpp
+
 # Megkeressük az aktuális ROS 2 workspace-t, ha benne állunk
-WORKSPACE_SETUP="$(pwd)/../../install/setup.bash"
+WORKSPACE_ROOT=$(cd ../.. && pwd)
+WORKSPACE_SETUP="$WORKSPACE_ROOT/install/setup.bash"
+
+echo "=================================================="
+echo " A csomag felépítése (colcon build) ..."
+echo "=================================================="
+(cd "$WORKSPACE_ROOT" && colcon build)
+
 if [ -f "$WORKSPACE_SETUP" ]; then
+    # Hozzáadjuk a bashrc-hez az aktuális felhasználónak
     if ! grep -q "source $WORKSPACE_SETUP" ~/.bashrc; then
       echo "source $WORKSPACE_SETUP" >> ~/.bashrc
       echo "Workspace környezet ($WORKSPACE_SETUP) hozzáadva a ~/.bashrc fájlhoz."
     fi
+    # És rögtön aktiváljuk is erre a sessionre
+    source "$WORKSPACE_SETUP"
 fi
 
 echo "=================================================="

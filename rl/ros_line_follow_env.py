@@ -30,26 +30,10 @@ class RosLineFollowEnv(gym.Env, Node):
     FINISH_RADIUS = 0.5     # How close robot needs to be to "cross" finish line
     FINISH_REWARD = 200.0   # Bonus reward for reaching finish line
 
-    # --- DOMAIN RANDOMIZATION CONFIGURATION ---
-    # TEMPORARILY DISABLED for debugging reset issues
-    RANDOMIZE_GROUND_COLOR = False
-    RANDOMIZE_LINE_WIDTH = False
-    RANDOMIZE_CAMERA_PITCH = False
-    RANDOMIZE_TRACK = True  # Enable randomizing between predefined manual tracks
-    
-    # Available Gazebo ground colors (from Gazebo's built-in materials)
-    GROUND_COLORS = ['Gray', 'Black', 'White', 'Blue', 'Green']
-    
-    # Line width range (meters)
-    LINE_WIDTH_MIN = 0.03
-    LINE_WIDTH_MAX = 0.05
-    
-    # Camera pitch range (radians, positive = looking down)
-    CAMERA_PITCH_MIN = 0.2   # Looking slightly down
-    CAMERA_PITCH_MAX = 0.5   # Looking more down
+    # --- ENVIRONMENT CONFIGURATION ---
+    # (Domain randomization has been removed by request)
     
     # Track definition - control points for Catmull-Rom spline
-    # We will randomly pick one of these predefined tracks on reset
     PREDEFINED_TRACKS = [
         # Original track requested in the beginning
         [
@@ -138,11 +122,8 @@ class RosLineFollowEnv(gym.Env, Node):
          (-8.0, 9.0),
          (-5.0, 9.0)
          ]
-        ]
-
+    ]
     
-    
-    # Set the initial track points
     TRACK_POINTS = PREDEFINED_TRACKS[0]
     
     # --- FORBIDDEN ZONES FOR TRACK GENERATION ---
@@ -234,7 +215,6 @@ class RosLineFollowEnv(gym.Env, Node):
         
         # Robot and model names
         self.robot_name = 'two_wheeled_robot'
-        self.ground_overlay_name = 'ground_overlay'
         self.line_model_name = 'track_line'
         
         # Current randomization values
@@ -285,127 +265,127 @@ class RosLineFollowEnv(gym.Env, Node):
         )
         return distance_to_finish < self.FINISH_RADIUS
 
-    def _randomize_environment(self):
-        """Apply domain randomization by respawning models with new parameters."""
+    def _setup_and_reset_environment(self):
+        """Set up the environment initially, and reset the robot position on subsequent calls."""
+        # Randomize track
+        new_track = random.choice(self.PREDEFINED_TRACKS)
+        track_changed = False
+        if new_track != self.TRACK_POINTS:
+            track_changed = True
+            
+        self.TRACK_POINTS = new_track
         
-        # First time setup - spawn the line (required even without randomization)
+        # Update finish line configuration dynamically based on track
+        if len(self.TRACK_POINTS) > 0:
+            self.FINISH_X = self.TRACK_POINTS[-1][0]
+            self.FINISH_Y = self.TRACK_POINTS[-1][1]
+            self.SPAWN_X = self.TRACK_POINTS[0][0]
+            self.SPAWN_Y = self.TRACK_POINTS[0][1]
+
+        # First time setup
         if not self.initial_setup_done:
-            self.get_logger().info("Initial setup: Spawning track line...")
+            self.get_logger().info("Initial setup: Spawning track line and robot...")
+            self._respawn_robot()
             self._respawn_line()
             self.initial_setup_done = True
             time.sleep(0.5)  # Wait for line to appear
-        
-        # Check if any randomization is enabled
-        any_randomization = (self.RANDOMIZE_LINE_WIDTH or 
-                             self.RANDOMIZE_CAMERA_PITCH or
-                             getattr(self, 'RANDOMIZE_TRACK', False))
-        
-        if not any_randomization:
-            # No randomization - just reset robot position without respawning
-            self._reset_robot_position()
-            self.get_logger().info("Reset: Robot position reset (no domain randomization)")
             return
-        
-        # Generate random values
-        if self.RANDOMIZE_LINE_WIDTH:
-            self.current_line_width = random.uniform(self.LINE_WIDTH_MIN, self.LINE_WIDTH_MAX)
-        
-        if self.RANDOMIZE_CAMERA_PITCH:
-            self.current_camera_pitch = random.uniform(self.CAMERA_PITCH_MIN, self.CAMERA_PITCH_MAX)
-        
-        # Delete and respawn robot with new camera pitch
-        self._respawn_robot()
-        
-        # Always spawn ground overlay with padlo.jpg
-        self._spawn_ground_overlay()
             
-        # Select a random predefined track if track randomization is enabled
-        if getattr(self, 'RANDOMIZE_TRACK', False):
-            self.TRACK_POINTS = random.choice(self.PREDEFINED_TRACKS)
-            # Update finish criteria based on the new track
-            if len(self.TRACK_POINTS) > 0:
-                self.FINISH_X = self.TRACK_POINTS[-1][0]
-                self.FINISH_Y = self.TRACK_POINTS[-1][1]
-                self.SPAWN_X = self.TRACK_POINTS[0][0]
-                self.SPAWN_Y = self.TRACK_POINTS[0][1]
-            self.get_logger().info(f"Selected predefined track starting at ({self.SPAWN_X}, {self.SPAWN_Y}) and ending at ({self.FINISH_X}, {self.FINISH_Y})")
-        
-        # Respawn line with new width or new track
-        if self.RANDOMIZE_LINE_WIDTH or getattr(self, 'RANDOMIZE_TRACK', False):
+        # If we selected a new track, respawn the line
+        if track_changed:
+            self.get_logger().info(f"Selected predefined track starting at ({self.SPAWN_X}, {self.SPAWN_Y})")
             self._respawn_line()
         
-        self.get_logger().info(
-            f"Domain Randomization: ground={self.current_ground_color}, "
-            f"line_width={self.current_line_width:.3f}m, "
-            f"camera_pitch={math.degrees(self.current_camera_pitch):.1f}°"
-        )
+        # On subsequent resets, just reset the robot position to the start of the current track
+        self._reset_robot_position()
     
     def _reset_robot_position(self):
         """Reset robot to starting position without respawning (faster)."""
         from gazebo_msgs.srv import SetEntityState
         from gazebo_msgs.msg import EntityState
+        import subprocess
         
-        # Create service client if not exists
         if not hasattr(self, 'set_state_client'):
-            self.set_state_client = self.create_client(SetEntityState, '/gazebo/set_entity_state')
-        
-        if not self.set_state_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().warn('set_entity_state service not available, using respawn')
-            self._respawn_robot()
-            return
-        
-        # Create request
+            self.set_state_client = self.create_client(SetEntityState, '/set_entity_state')
+
         req = SetEntityState.Request()
-        req.state = EntityState()
         req.state.name = self.robot_name
         req.state.pose.position.x = self.SPAWN_X
         req.state.pose.position.y = self.SPAWN_Y
         req.state.pose.position.z = 0.05
-        
-        # Set orientation (yaw = -3.14)
         yaw = -3.14
         req.state.pose.orientation.w = math.cos(yaw / 2)
         req.state.pose.orientation.z = math.sin(yaw / 2)
+
+        success = False
+        # 1. Próbálkozás rclpy-vel
+        if self.set_state_client.wait_for_service(timeout_sec=1.0):
+            try:
+                future = self.set_state_client.call_async(req)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+                if future.result() is not None and future.result().success:
+                    success = True
+            except Exception:
+                pass
         
-        # Reset velocities
-        req.state.twist.linear.x = 0.0
-        req.state.twist.linear.y = 0.0
-        req.state.twist.linear.z = 0.0
-        req.state.twist.angular.x = 0.0
-        req.state.twist.angular.y = 0.0
-        req.state.twist.angular.z = 0.0
-        
-        future = self.set_state_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        
-        if future.result() is not None and future.result().success:
-            self.get_logger().debug("Robot position reset successfully")
-        else:
-            self.get_logger().warn("Failed to reset robot position, using respawn")
+        # 2. Ha az rclpy eldobta (timeout vagy false), jöhet a CLI fallback
+        if not success:
+            cmd = [
+                "ros2", "service", "call", "/set_entity_state", "gazebo_msgs/srv/SetEntityState",
+                f"{{state: {{name: '{self.robot_name}', pose: {{position: {{x: {self.SPAWN_X}, y: {self.SPAWN_Y}, z: 0.05}}, orientation: {{x: 0.0, y: 0.0, z: -1.0, w: 0.0}}}}}}}}"
+            ]
+            for _ in range(3):
+                try:
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
+                    if "success=True" in res.stdout or "success=True" in res.stderr or "successs=True" in res.stderr:
+                        success = True
+                        break
+                except Exception:
+                    pass
+                time.sleep(0.5)
+
+        if not success:
+            self.get_logger().warn("Mindkét teleport (API és CLI) sikertelen, használjuk a teljes respawnt!")
             self._respawn_robot()
 
     def _delete_entity(self, name):
-        """Delete an entity from Gazebo."""
-        if not self.delete_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warn('delete_entity service not available')
-            return False
-        
+        """Hívja a delete_entity service-t, robosztus újrapróbálkozással és CLI fallback-kel."""
         req = DeleteEntity.Request()
         req.name = name
+
+        max_retries = 3
+        for attempt in range(max_retries):
+            if not self.delete_client.wait_for_service(timeout_sec=2.0):
+                self.get_logger().warning(f"DeleteEntity service nem elérhető az rclpy-ben, próbálkozás terminál (CLI) fallback-kel: {name}")
+                import subprocess
+                try:
+                    cmd = ["ros2", "service", "call", "/delete_entity", "gazebo_msgs/srv/DeleteEntity", f"{{name: '{name}'}}"]
+                    res = subprocess.run(cmd, capture_output=True, text=True, timeout=5.0)
+                    if "success=True" in res.stdout or "successs=True" in res.stderr:
+                        return True
+                except Exception as e:
+                    pass
+                time.sleep(1.0)
+                continue
+                
+            try:
+                future = self.delete_client.call_async(req)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+                
+                if future.result() is not None and future.result().success:
+                    return True
+                else:
+                    self.get_logger().warning(f"Nem sikerült törölni az entitást: {name} (lehet, hogy már nem is létezik).")
+                    return False
+            except Exception as e:
+                self.get_logger().error(f"Hiba a delete_entity hívásakor: {e}")
+                time.sleep(1.0)
         
-        future = self.delete_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=10.0)
-        
-        if future.result() is not None:
-            return future.result().success
+        self.get_logger().error("A DeleteEntity service tartósan nem elérhető!")
         return False
 
     def _spawn_entity(self, name, xml, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
-        """Spawn an entity in Gazebo."""
-        if not self.spawn_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warn('spawn_entity service not available')
-            return False
-        
+        """Spawn an entity in Gazebo robustly."""
         req = SpawnEntity.Request()
         req.name = name
         req.xml = xml
@@ -413,24 +393,51 @@ class RosLineFollowEnv(gym.Env, Node):
         req.initial_pose.position.y = float(y)
         req.initial_pose.position.z = float(z)
         
-        # Convert euler to quaternion
-        cy = math.cos(yaw * 0.5)
-        sy = math.sin(yaw * 0.5)
-        cp = math.cos(pitch * 0.5)
-        sp = math.sin(pitch * 0.5)
-        cr = math.cos(roll * 0.5)
-        sr = math.sin(roll * 0.5)
+        cy = math.cos(yaw * 0.5); sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5); sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5); sr = math.sin(roll * 0.5)
         
         req.initial_pose.orientation.w = cr * cp * cy + sr * sp * sy
         req.initial_pose.orientation.x = sr * cp * cy - cr * sp * sy
         req.initial_pose.orientation.y = cr * sp * cy + sr * cp * sy
         req.initial_pose.orientation.z = cr * cp * sy - sr * sp * cy
-        
-        future = self.spawn_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=15.0)
-        
-        if future.result() is not None:
-            return future.result().success
+
+        # 1. API attempt
+        if self.spawn_client.wait_for_service(timeout_sec=1.0):
+            try:
+                future = self.spawn_client.call_async(req)
+                rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+                if future.result() is not None and future.result().success:
+                    return True
+            except Exception:
+                pass
+                
+        # 2. CLI Fallback (írás fájlba majd spawn via script)
+        self.get_logger().warn(f"API spawn falied for {name}, trying CLI tool...")
+        import subprocess
+        import tempfile
+        try:
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.xml') as temp_xml:
+                temp_xml.write(xml)
+                temp_xml_path = temp_xml.name
+                
+            cmd = [
+                "ros2", "run", "gazebo_ros", "spawn_entity.py", 
+                "-entity", name, "-file", temp_xml_path,
+                "-x", str(x), "-y", str(y), "-z", str(z),
+                "-R", str(roll), "-P", str(pitch), "-Y", str(yaw)
+            ]
+            for _ in range(3):
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10.0)
+                if "Spawn status: SpawnEntity: Successfully spawned" in res.stdout or res.returncode == 0:
+                    import os; os.unlink(temp_xml_path)
+                    return True
+                time.sleep(1.0)
+                
+            import os; os.unlink(temp_xml_path)
+        except Exception as e:
+            self.get_logger().error(f"Fallback spawn tool failed: {e}")
+            
         return False
 
     def _respawn_robot(self):
@@ -440,7 +447,7 @@ class RosLineFollowEnv(gym.Env, Node):
         for attempt in range(max_retries):
             # Delete existing robot
             delete_success = self._delete_entity(self.robot_name)
-            time.sleep(0.5)
+            time.sleep(1.0)  # Növelt várakozás a stabilitás érdekében (Gazebo takarítás)
             
             # Read and modify URDF with new camera pitch
             try:
@@ -476,54 +483,19 @@ class RosLineFollowEnv(gym.Env, Node):
         self.get_logger().error("Failed to respawn robot after all retries!")
         return False
 
-    def _spawn_ground_overlay(self):
-        """Spawn a colored ground overlay plane."""
-        # Delete existing overlay if any
-        self._delete_entity(self.ground_overlay_name)
-        time.sleep(0.3)
-        
-        # Create SDF for colored ground overlay
-        # This is a thin plane just above the ground with the selected color
-        sdf = f'''<?xml version="1.0"?>
-<sdf version="1.6">
-  <model name="{self.ground_overlay_name}">
-    <static>true</static>
-    <link name="link">
-      <visual name="visual">
-        <geometry>
-          <plane>
-            <normal>0 0 1</normal>
-            <size>100 100</size>
-          </plane>
-        </geometry>
-        <material>
-          <script>
-            <uri>file://media/materials/scripts/gazebo.material</uri>
-            <name>Gazebo/Grey</name>
-          </script>
-        </material>
-      </visual>
-    </link>
-  </model>
-</sdf>'''
-        
-        # Spawn slightly above ground to overlay it
-        success = self._spawn_entity(
-            self.ground_overlay_name,
-            sdf,
-            0.0, 0.0, 0.001  # 1mm above ground
-        )
-        
-        if success:
-            self.get_logger().debug(f"Ground overlay spawned with color: {self.current_ground_color}")
-        else:
-            self.get_logger().warn("Failed to spawn ground overlay")
-
     def _respawn_line(self):
         """Delete and respawn the track line with new width using Catmull-Rom spline."""
         # Delete existing line
         self._delete_entity(self.line_model_name)
-        time.sleep(0.3)
+        time.sleep(1.0)  # Késleltetés a törlés után a szimulátor teljesítményéhez
+        
+        # DDS üzenetsor késleltetési hibájának (beragadt DELETE parancs) elkerüléséhez
+        # minden újracsinálásnál sorszámozzuk a vonal nevét. Így egy későn megérkező
+        # törlési parancs nem tudja a már frissen lerakott vonalat véletlenül eltüntetni!
+        if not hasattr(self, 'track_version'):
+            self.track_version = 0
+        self.track_version += 1
+        self.line_model_name = f"track_line_v{self.track_version}"
         
         # Generate spline points
         spline_points = self._catmull_rom_spline(self.TRACK_POINTS, self.SPLINE_RESOLUTION)
@@ -766,10 +738,13 @@ class RosLineFollowEnv(gym.Env, Node):
             terminated = True  # End episode on success
 
         # Heavy penalty for falling off the line (scaled to match new reward range)
-        
         if terminated and not crossed_finish:
-            reward = -100.0  # Larger penalty to discourage falling off
-            self.get_logger().info(f"Episode ended: Robot lost visual of line at step {self.current_step}")
+            if self.current_step < 5:
+                # Grace period at the beginning of the episode to find the line
+                terminated = False
+            else:
+                reward = -100.0  # Larger penalty to discourage falling off
+                self.get_logger().info(f"Episode ended: Robot lost visual of line at step {self.current_step}")
 
         # Increment step counter
         self.current_step += 1
@@ -795,8 +770,8 @@ class RosLineFollowEnv(gym.Env, Node):
         self.current_step = 0   # Reset episode step counter
         self.prev_angular_speed = 0.0 # Reset smoothness tracker
 
-        # --- Apply Domain Randomization (respawns robot and ground overlay) ---
-        self._randomize_environment()
+        # --- Reset Robot Environment ---
+        self._setup_and_reset_environment()
         
         # Wait for models to spawn and Gazebo to render the new environment
         end_wait_time = time.time() + 1.0

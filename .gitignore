@@ -7,3 +7,4 @@ log/
 
 # Egy konkrét fájl kihagyása
 to_do.txt
+ppo_line_follower_v2/

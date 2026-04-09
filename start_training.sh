@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# A Cyclone DDS hálózati réteg engedélyezése az instabilitások és szerviz fagyások elkerülése végett
+export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+
 # Source the ROS 2 setup configuration
 source install/setup.bash
 
