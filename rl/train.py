@@ -5,6 +5,7 @@ from ros_line_follow_env import RosLineFollowEnv
 from ament_index_python.packages import get_package_share_directory
 import os
 import torch
+import math
 
 # ============================================================================
 # HYPERPARAMETERS - Modify these to tune your training
@@ -16,14 +17,14 @@ LOG_INTERVAL = 1              # Log every N episodes
 
 # --- PPO Algorithm Parameters ---
 PPO_HYPERPARAMS = {
-    "learning_rate": 3e-4,    # Learning rate (default: 3e-4)
+    "learning_rate": 1e-3,    # Learning rate (default: 3e-4)
     "n_steps": 1024,           # Steps per update (Reduced so it logs multiple times during training)
     "batch_size": 64,         # Minibatch size (default: 64)
     "n_epochs": 10,           # Epochs per update (default: 10)
     "gamma": 0.99,            # Discount factor (default: 0.99)
     "gae_lambda": 0.95,       # GAE lambda (default: 0.95)
     "clip_range": 0.2,        # PPO clip range (default: 0.2)
-    "ent_coef": 0.01,         # Entropy coefficient - exploration (default: 0.0)
+    "ent_coef": 0.1,         # Entropy coefficient - exploration (default: 0.0)
     "vf_coef": 0.5,           # Value function coefficient (default: 0.5)
     "max_grad_norm": 0.5,     # Max gradient norm (default: 0.5)
 }
@@ -44,11 +45,11 @@ POLICY_KWARGS = {
 
 # ============================================================================
 
-def main(args=None):
-    rclpy.init(args=args)
+def main():
+    rclpy.init()
     
-    # --- 1. Create and check the environment ---
-    env = RosLineFollowEnv()
+    # Környezet példányosítása (A betanítás során az eredeti PREDEFINED_TRACKS-et használjuk, is_testing_mode=False)
+    env = RosLineFollowEnv(is_testing_mode=False)
     # It's good practice to check that your environment complies with the gym interface
     # check_env(env) # This check can be slow and sometimes has issues with ROS, use if needed
 
@@ -69,7 +70,23 @@ def main(args=None):
     # Check if a pre-trained model exists
     if os.path.exists(model_save_path + ".zip"):
         print("Loading existing model...")
-        model = PPO.load(model_save_path, env=env, tensorboard_log=tensorboard_log_dir)
+        # Fontos: Custom objects-ben adjuk át a megváltozott hiperparamétereket a .zip-nek!
+        model = PPO.load(model_save_path, env=env, custom_objects=PPO_HYPERPARAMS)
+        
+        # --- ERŐLTETETT KÍSÉRLETEZÉS (VARIANCE RESET) ---
+        # A PPO algoritmus hajlamos 0-ra csökkenteni a mozgási szórását,
+        # amitől "bátortalan" lesz és beragad a régi (rossz) mozdulataiba.
+        # Itt "bemenyúlunk az agyába", és kikényszerítjük, hogy újra a 
+        # képességei nagyjából 50%-os véletlenszerűségével kezdjen el próbálkozni!
+        
+        with torch.no_grad():
+            if hasattr(model.policy, 'log_std'):
+                model.policy.log_std.fill_(math.log(0.5))
+        print(">>> M.I. ERŐLTETETT KÍSÉRLETEZÉS BEKAPCSOLVA (Új mozdulatok kikényszerítve!) <<<")
+        # ------------------------------------------------
+        
+        # Ha logolni is akarjuk a folytatást
+        model.tensorboard_log = tensorboard_log_dir
     else:
         print("Creating new CNN-based model...")
         print(f"Using device: {torch.device('cuda' if torch.cuda.is_available() else 'cpu')}")

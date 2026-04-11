@@ -23,9 +23,9 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'line_follower_complete = two_wheeled_robot.scripts.line_follower_complete:main',
-            'random_drive = two_wheeled_robot.scripts.random_drive:main',
             'train = two_wheeled_robot.rl.train:main',
+            'evaluate = two_wheeled_robot.rl.evaluate:main',
+            'test = two_wheeled_robot.rl.test:main',
         ],
     },
 )
