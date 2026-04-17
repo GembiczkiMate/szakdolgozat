@@ -8,7 +8,7 @@ source install/setup.bash
 
 echo "Starting Gazebo Simulation..."
 # Start Gazebo in the background
-ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py &
+ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py headless:=True &
 GAZEBO_PID=$!
 
 echo "Waiting for 3 seconds to let Gazebo initialize..."

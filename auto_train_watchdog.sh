@@ -12,6 +12,21 @@ echo "*********************************************************"
 echo "* FELÜGYELT TRÉNING (WATCHDOG) ELINDÍTVA                *"
 echo "* Automatikus újraindítás fagyás vagy leállás esetén. *"
 echo "*********************************************************"
+echo ""
+echo "Milyen jutalmazási rendszerrel szeretnéd a tanítást futtatni?"
+echo "1) Kamerás kép alapján (Vision - eredeti verzió)"
+echo "2) Pálya koordinátái alapján (Coordinate - fizikai spline mérés)"
+read -p "Választásod (1/2): " REWARD_CHOICE
+
+# Exportáljuk környezeti változóként, amit a következő threadek (launch fileok) is látnak majd
+export TRAIN_REWARD_MODE="vision"
+if [ "$REWARD_CHOICE" == "2" ]; then
+    export TRAIN_REWARD_MODE="coordinate"
+    echo "[WATCHDOG] A matematikai (Coordinate) mód lett beállítva."
+else
+    echo "[WATCHDOG] A vizuális (Vision) mód lett beállítva."
+fi
+echo "====================================================="
 
 cleanup_and_exit() {
     echo ""

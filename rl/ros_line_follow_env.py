@@ -16,6 +16,8 @@ from track_config import TRAINING_TRACKS, TESTING_TRACKS, FORBIDDEN_ZONES
 from vision_processor import VisionProcessor
 from reward_calculator import RewardCalculator
 from gazebo_entity_manager import GazeboEntityManager
+from gazebo_utils import TrackGenerator
+from coordinate_processor import CoordinateProcessor
 
 
 
@@ -30,20 +32,21 @@ class RosLineFollowEnv(gym.Env, Node):
     SPAWN_Y = -4.2
     
     FINISH_RADIUS = 0.5     # How close robot needs to be to "cross" finish line
-    FINISH_REWARD = 200.0   # Bonus reward for reaching finish line
+    FINISH_REWARD = 200.0   # Eredeti bonus reward for reaching finish line
 
     
     
     # Number of interpolation points between each control point
     SPLINE_RESOLUTION = 20
 
-    def __init__(self, is_testing_mode=False):
+    def __init__(self, is_testing_mode=False, reward_mode='vision'):
         # Initialize the Gym Environment and the ROS2 Node
         gym.Env.__init__(self)
         Node.__init__(self, 'ros_line_follow_env')
         
         self.is_testing_mode = is_testing_mode
-        self.get_logger().info(f"Environment initialized in {'TESTING' if is_testing_mode else 'TRAINING'} mode.")
+        self.reward_mode = reward_mode
+        self.get_logger().info(f"Environment initialized in {'TESTING' if is_testing_mode else 'TRAINING'} mode. Reward system: {self.reward_mode.upper()}")
 
         # Bind external configs
         self.PREDEFINED_TRACKS = TESTING_TRACKS if self.is_testing_mode else TRAINING_TRACKS
@@ -80,6 +83,7 @@ class RosLineFollowEnv(gym.Env, Node):
 
         # --- Extracted Modules ---
         self.vision_processor = VisionProcessor(self.img_height, self.img_width)
+        self.coordinate_processor = CoordinateProcessor(max_allowed_deviation_meters=0.1) # Távolság lecsökkentve 15 cm-re (a kamera látószögének megfelelő szélesség)
         self.reward_calculator = RewardCalculator(self.max_speed, self.max_turn, self.FINISH_REWARD)
 
         # --- ROS2 Connections ---
@@ -157,6 +161,11 @@ class RosLineFollowEnv(gym.Env, Node):
             
         self.TRACK_POINTS = new_track
         
+        # Frissítsük a coordinate processort is, ha valaha változik a pálya vagy az elején vagyunk
+        if track_changed or not hasattr(self, 'initial_setup_done') or not self.initial_setup_done:
+            spline_pts = TrackGenerator._catmull_rom_spline(self.TRACK_POINTS, self.SPLINE_RESOLUTION)
+            self.coordinate_processor.update_track_spline(spline_pts)
+        
         # Update finish line configuration dynamically based on track
         if len(self.TRACK_POINTS) > 0:
             self.FINISH_X = self.TRACK_POINTS[-1][0]
@@ -187,23 +196,47 @@ class RosLineFollowEnv(gym.Env, Node):
         if self.latest_image is None:
             # Return empty observation if no image
             empty_obs = np.zeros((3, self.img_height, self.img_width), dtype=np.uint8)
-            return empty_obs, 0.0, False
+            return empty_obs, 0.0, False, 0.0
 
         frame = self.bridge.imgmsg_to_cv2(self.latest_image, "bgr8")
-        return self.vision_processor.process_image(frame)
+        img_obs, vis_error, vis_term, area = self.vision_processor.process_image(frame)
+        
+        # Ide jön a varázslat: ha 'coordinate' mód van, felülírjuk a kamerás büntetéseket
+        # De az img_obs persze ugyanúgy megy az agynak!
+        if self.reward_mode == 'coordinate':
+            coord_error, coordinate_term = self.coordinate_processor.calculate_error_and_termination(self.robot_x, self.robot_y)
+            # Terminálás, ha VAGY fizikailag távolodik el túlságosan a spline-tól, VAGY a kamera is elvesztette a vonalat.
+            combined_term = coordinate_term or vis_term
+            return img_obs, coord_error, combined_term, area
+        else:
+            return img_obs, vis_error, vis_term, area
 
     def step(self, action):
         # 1. Send action to the robot
         # Scale down actions so the robot moves slower physically while satisfying
         # the neural network's original trained action space scale.
         # Max original speed 0.5 -> scaled to 0.3 (60%)
-        # Max original turn 1.5 -> scaled to 1.0 (66.6%)
+        # Max original turn 1.5 -> scaled to 1.3 (86.6%) - Megemelve, hogy fizikailag jobban tudjon kanyarodni!
         twist = Twist()
         base_linear = float(action[0])
         base_angular = float(action[1])
         
         linear_speed = base_linear * (0.3 / 0.4)
-        angular_speed = base_angular * (1.0 / 1.6)
+        # Dinamikus kormányszorzó a vonal területe alapján (Kanyar-asszisztens)
+        # Ha a terület "nagy" (>4000), ez egyenes. Szorzó = 1.0
+        # Ha a terület lecsökken (kanyar, <2000), a szorzó megnő (akár 1.6x-osra)
+        area_multiplier = 1.0
+        if hasattr(self, 'last_line_area') and self.last_line_area > 0:
+            if self.last_line_area < 2500:
+                area_multiplier = 1.5  # Erős boost kanyarban
+            elif self.last_line_area < 3500:
+                area_multiplier = 1.25 # Enyhe boost
+                
+        # Base multiplier and dynamic area multiplier
+        angular_speed = base_angular * (1.3 / 1.5) * area_multiplier
+        
+        # Fizikai plafon, nehogy túlpörögjön a szervó:
+        angular_speed = max(min(angular_speed, 1.8), -1.8)
         
         twist.linear.x = linear_speed
         twist.angular.z = angular_speed
@@ -216,7 +249,7 @@ class RosLineFollowEnv(gym.Env, Node):
             rclpy.spin_once(self, timeout_sec=0.01)
 
         # 3. Get observation and calculate reward
-        obs, error, terminated = self._get_obs()
+        obs, error, terminated, self.last_line_area = self._get_obs()
         
         # --- Check for finish line ---
         crossed_finish = self.check_finish_line()
@@ -236,13 +269,18 @@ class RosLineFollowEnv(gym.Env, Node):
         
         if crossed_finish and not self.finished:
             reward += term_reward
+            self.episode_reward_sum += reward
             self.finished = True
-            self.get_logger().info(f"FINISH LINE CROSSED! Bonus: +{self.FINISH_REWARD}")
+            self.get_logger().info(f"FINISH LINE CROSSED! Bonus: +{self.FINISH_REWARD} | Total Episode Reward: {self.episode_reward_sum:.2f}")
             
         elif terminated and not crossed_finish:
             if term_reward < 0:
                 reward = term_reward
-                self.get_logger().info(f"Episode ended: Robot lost visual of line at step {self.current_step}")
+                self.episode_reward_sum += reward
+                self.get_logger().info(f"Episode ended: Robot lost visual of line at step {self.current_step} | Total Episode Reward: {self.episode_reward_sum:.2f}")
+        else:
+            # Csak sima lépés történt
+            self.episode_reward_sum += reward
 
         # Increment step counter
         self.current_step += 1
@@ -267,6 +305,8 @@ class RosLineFollowEnv(gym.Env, Node):
         self.steps_on_line = 0  # Reset step counter
         self.current_step = 0   # Reset episode step counter
         self.prev_angular_speed = 0.0 # Reset smoothness tracker
+        self.episode_reward_sum = 0.0 # Track total reward for the episode
+        self.last_line_area = 5000.0  # Kezdeti becsült terület
 
         # --- Reset Robot Environment ---
         self._setup_and_reset_environment()
@@ -282,7 +322,7 @@ class RosLineFollowEnv(gym.Env, Node):
         while not self.image_received and (time.time() - start_time) < 3.0:
             rclpy.spin_once(self, timeout_sec=0.01)
 
-        obs, _, _ = self._get_obs()
+        obs, _, _, self.last_line_area = self._get_obs()
         info = {
             'ground_color': self.current_ground_color,
             'line_width': self.current_line_width,

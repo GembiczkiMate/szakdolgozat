@@ -46,14 +46,14 @@ class VisionProcessor:
                     # 1. Calculate the error in pixels from the center
                     pixel_error = width / 2 - cx
             
-                    # 2. Check if it deviates more than 30% from the center
-                    max_allowed_deviation = width * 0.30
+                    # 2. Check if it deviates more than 40% from the center
+                    max_allowed_deviation = width * 0.4
                     terminated = abs(pixel_error) > max_allowed_deviation
             
                     # 3. Calculate the normalized error
                     normalized_error = pixel_error / (width / 2)
             
-                    return img_obs, normalized_error, terminated
+                    return img_obs, normalized_error, terminated, area
         
         # No line detected - return image obs with error=1.0 (worst case)
-        return img_obs, 1.0, True
+        return img_obs, 1.0, True, 0.0

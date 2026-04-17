@@ -7,26 +7,28 @@ import os
 import torch
 import math
 
+import argparse
+
 # ============================================================================
 # HYPERPARAMETERS - Modify these to tune your training
 # ============================================================================
 
 # --- Training Parameters ---
-TOTAL_TIMESTEPS = 10000       # Total training steps (Must be larger than n_steps to log anything!)
+TOTAL_TIMESTEPS = 10000       # Jelentősen megemelve, hogy legyen ideje tanulni (10k -> 300k)
 LOG_INTERVAL = 1              # Log every N episodes
 
 # --- PPO Algorithm Parameters ---
 PPO_HYPERPARAMS = {
-    "learning_rate": 1e-3,    # Learning rate (default: 3e-4)
-    "n_steps": 1024,           # Steps per update (Reduced so it logs multiple times during training)
-    "batch_size": 64,         # Minibatch size (default: 64)
-    "n_epochs": 10,           # Epochs per update (default: 10)
-    "gamma": 0.99,            # Discount factor (default: 0.99)
-    "gae_lambda": 0.95,       # GAE lambda (default: 0.95)
-    "clip_range": 0.2,        # PPO clip range (default: 0.2)
-    "ent_coef": 0.1,         # Entropy coefficient - exploration (default: 0.0)
-    "vf_coef": 0.5,           # Value function coefficient (default: 0.5)
-    "max_grad_norm": 0.5,     # Max gradient norm (default: 0.5)
+    "learning_rate": 2.5e-4,    # Megnövelt tanulási ráta, hogy gyorsabban tanuljon az új környezetből
+    "n_steps": 512,           
+    "batch_size": 128,         
+    "n_epochs": 10,           
+    "gamma": 0.99,            
+    "gae_lambda": 0.95,       
+    "clip_range": 0.2,        
+    "ent_coef": 0.05,        # Magasabb entrópia ezen a ponton (0.005 -> 0.05), hogy merjen kísérletezni az új jutalommal!
+    "vf_coef": 0.5,           
+    "max_grad_norm": 0.5,     
 }
 
 # --- CNN Policy Architecture ---
@@ -46,10 +48,16 @@ POLICY_KWARGS = {
 # ============================================================================
 
 def main():
+    parser = argparse.ArgumentParser(description='Train PPO on Line Follower.')
+    parser.add_argument('--reward-mode', type=str, default='vision', choices=['vision', 'coordinate'],
+                        help="Reward calculation mode: 'vision' (based on camera) or 'coordinate' (based on odometry distance to spline).")
+    # A ROS2 miatt ki kell szűrnünk a rosnak szánt argumentumokat (mint pl. a --ros-args)
+    args, unknown = parser.parse_known_args()
+
     rclpy.init()
     
-    # Környezet példányosítása (A betanítás során az eredeti PREDEFINED_TRACKS-et használjuk, is_testing_mode=False)
-    env = RosLineFollowEnv(is_testing_mode=False)
+    # Környezet példányosítása a bemeneti paraméterrel
+    env = RosLineFollowEnv(is_testing_mode=False, reward_mode=args.reward_mode)
     # It's good practice to check that your environment complies with the gym interface
     # check_env(env) # This check can be slow and sometimes has issues with ROS, use if needed
 
@@ -73,17 +81,10 @@ def main():
         # Fontos: Custom objects-ben adjuk át a megváltozott hiperparamétereket a .zip-nek!
         model = PPO.load(model_save_path, env=env, custom_objects=PPO_HYPERPARAMS)
         
-        # --- ERŐLTETETT KÍSÉRLETEZÉS (VARIANCE RESET) ---
-        # A PPO algoritmus hajlamos 0-ra csökkenteni a mozgási szórását,
-        # amitől "bátortalan" lesz és beragad a régi (rossz) mozdulataiba.
-        # Itt "bemenyúlunk az agyába", és kikényszerítjük, hogy újra a 
-        # képességei nagyjából 50%-os véletlenszerűségével kezdjen el próbálkozni!
-        
-        with torch.no_grad():
-            if hasattr(model.policy, 'log_std'):
-                model.policy.log_std.fill_(math.log(0.5))
-        print(">>> M.I. ERŐLTETETT KÍSÉRLETEZÉS BEKAPCSOLVA (Új mozdulatok kikényszerítve!) <<<")
-        # ------------------------------------------------
+        # --- ERŐLTETETT KÍSÉRLETEZÉS KIKAPCSOLVA ---
+        # A korábbi "variance hack" (log_std kényszerítése) itt ki lett véve, 
+        # mert ha minden újraindításnál lefut (amit a watchdog generál), a robot folyamatosan 
+        # "elfelejti" a finommozgásokat, és a reward rohamosan csökkeni kezd.
         
         # Ha logolni is akarjuk a folytatást
         model.tensorboard_log = tensorboard_log_dir
