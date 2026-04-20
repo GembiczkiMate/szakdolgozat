@@ -7,4 +7,6 @@ log/
 
 # Egy konkrét fájl kihagyása
 to_do.txt
-ppo_line_follower_v2/
+# Modell mentési mappák kihagyása
+ppo_line_follower*/
+ppo_line_follower/

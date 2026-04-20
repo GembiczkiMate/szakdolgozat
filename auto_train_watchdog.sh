@@ -2,6 +2,7 @@
 
 # ROS beállítása a szervizek lekérdezéséhez
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+export ROS_LOCALHOST_ONLY=1
 source install/setup.bash
 
 # Beállítások
@@ -25,6 +26,18 @@ if [ "$REWARD_CHOICE" == "2" ]; then
     echo "[WATCHDOG] A matematikai (Coordinate) mód lett beállítva."
 else
     echo "[WATCHDOG] A vizuális (Vision) mód lett beállítva."
+fi
+echo ""
+echo "Szeretnéd nyomon követni a szimulációt képpel? (A rejtett Headless mód sokkal gyorsabb!)"
+echo "1) Igen (Látható Gazebo GUI, Watchdog figyeli a szervizek fagyását is)"
+echo "2) Nem  (Gyors Rejtett Gazebo, Watchdog csak Python szintű fagyást néz)"
+read -p "Választásod (1/2): " WATCH_GAZEBO
+
+# Ha látni akarja, kikapcsoljuk a headless-t
+if [ "$WATCH_GAZEBO" == "1" ]; then
+    export GAZEBO_HEADLESS="False"
+else
+    export GAZEBO_HEADLESS="True"
 fi
 echo "====================================================="
 
@@ -82,26 +95,29 @@ while true; do
         
         # Lekérdezzük a /spawn_entity szervizt egy 10 másodperces időkorláttal
         # Ha a Gazebo kifagy, ez a hívás beáll vagy hibát dob
-        if timeout 10 ros2 service type /spawn_entity > /dev/null 2>&1; then
-            HANG_TIMER=0  # Minden rendben, a számláló nullázódik
-        else
-            HANG_TIMER=$((HANG_TIMER + CHECK_INTERVAL))
-            echo "[WATCHDOG] FIGYELEM: A szimulátor nem válaszol $HANG_TIMER másodperce..."
-        fi
-        
-        # Ha a kifagyás meghaladta a megengedett 4 percet
-        if [ $HANG_TIMER -ge $TIMEOUT_LIMIT ]; then
-            echo "====================================================="
-            echo "[WATCHDOG] KRITIKUS: A szimuláció végleg lefagyott (>$TIMEOUT_LIMIT mp)!"
-            echo "[WATCHDOG] Folyamatok azonnali lelövése és újraindítása..."
-            echo "====================================================="
+        if [ "$WATCH_GAZEBO" == "1" ]; then
+            # Helyes módszer a Gazebo életbenlétének ellenőrzésére
+            if timeout 15 ros2 service call /gazebo/describe_parameters rcl_interfaces/srv/DescribeParameters "{}" > /dev/null 2>&1; then
+                HANG_TIMER=0  # Minden rendben, a számláló nullázódik
+            else
+                HANG_TIMER=$((HANG_TIMER + CHECK_INTERVAL))
+                echo "[WATCHDOG] FIGYELEM: A szimulátor nem válaszol $HANG_TIMER másodperce..."
+            fi
             
-            kill -9 $MAIN_PID 2>/dev/null
-            pkill -9 -f train.py 2>/dev/null
-            pkill -9 -f gzserver 2>/dev/null
-            pkill -9 -f gzclient 2>/dev/null
-            sleep 5
-            break # A belső ciklust megszakítja, így a külső while true elölről elindítja az egészet
+            # Ha a kifagyás meghaladta a megengedett 4 percet
+            if [ $HANG_TIMER -ge $TIMEOUT_LIMIT ]; then
+                echo "====================================================="
+                echo "[WATCHDOG] KRITIKUS: A szimuláció végleg lefagyott (>$TIMEOUT_LIMIT mp)!"
+                echo "[WATCHDOG] Folyamatok azonnali lelövése és újraindítása..."
+                echo "====================================================="
+                
+                kill -9 $MAIN_PID 2>/dev/null
+                pkill -9 -f train.py 2>/dev/null
+                pkill -9 -f gzserver 2>/dev/null
+                pkill -9 -f gzclient 2>/dev/null
+                sleep 5
+                break # A belső ciklust megszakítja, így a külső while true elölről elindítja az egészet
+            fi
         fi
         
         sleep $CHECK_INTERVAL

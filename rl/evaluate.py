@@ -1,12 +1,17 @@
 import rclpy
 import os
 import numpy as np
+import argparse
 from stable_baselines3 import PPO
 from ros_line_follow_env import RosLineFollowEnv
 from ament_index_python.packages import get_package_share_directory
 
-def main(args=None):
-    rclpy.init(args=args)
+def main():
+    parser = argparse.ArgumentParser(description='Evaluate PPO on Line Follower.')
+    parser.add_argument('--reward-mode', type=str, default='vision', choices=['vision', 'coordinate'], help="Model type to evaluate.")
+    args, unknown = parser.parse_known_args()
+    
+    rclpy.init()
     
     print("==================================================")
     print(" VALIDÁCIÓ (KIPRÓBÁLÁS STATISZTIKÁKKAL) INDÍTÁSA")
@@ -15,12 +20,13 @@ def main(args=None):
     # Létrehozzuk a környezetet a Validációhoz (ugyanaz a Gazebo pálya)
     # Itt is_testing_mode=False azért kell, hogy azokon a pályákon értékelje ki magát,
     # amiken a betanítás is zajlott. A modell itt már Hálózatot nem frissít, csak prediktál!
-    env = RosLineFollowEnv(is_testing_mode=False)
+    env = RosLineFollowEnv(is_testing_mode=False, reward_mode=args.reward_mode)
     
     # Megkeressük az elmentett modellfájlt (model.zip) a mapparendszerben
     package_share_dir = get_package_share_directory('two_wheeled_robot')
     workspace_dir = os.path.join(package_share_dir, '..', '..', '..', '..')
-    save_dir = os.path.abspath(os.path.join(workspace_dir, "ppo_line_follower_v2"))
+    folder_name = f"ppo_line_follower_{args.reward_mode}"
+    save_dir = os.path.abspath(os.path.join(workspace_dir, folder_name))
     model_path = os.path.join(save_dir, "model.zip")
     
     if not os.path.exists(model_path):

@@ -83,7 +83,7 @@ class RosLineFollowEnv(gym.Env, Node):
 
         # --- Extracted Modules ---
         self.vision_processor = VisionProcessor(self.img_height, self.img_width)
-        self.coordinate_processor = CoordinateProcessor(max_allowed_deviation_meters=0.1) # Távolság lecsökkentve 15 cm-re (a kamera látószögének megfelelő szélesség)
+        self.coordinate_processor = CoordinateProcessor(max_allowed_deviation_meters=0.15) # Távolság lecsökkentve 15 cm-re (a kamera látószögének megfelelő szélesség)
         self.reward_calculator = RewardCalculator(self.max_speed, self.max_turn, self.FINISH_REWARD)
 
         # --- ROS2 Connections ---
@@ -284,10 +284,13 @@ class RosLineFollowEnv(gym.Env, Node):
 
         # Increment step counter
         self.current_step += 1
-        # Truncation due to max steps is disabled.
-        # The episode will only end if the robot falls off the line or crosses the finish line.
-        truncated = False
         
+        # Truncation: Ha a robot beakad és végeérhetetlenül kering, le kell állítani az epizódot!
+        truncated = False
+        if self.current_step >= self.max_steps:
+            truncated = True
+            self.get_logger().info(f"Episode truncated at max steps ({self.max_steps}). Total Reward: {self.episode_reward_sum:.2f}")
+
         info = {}
 
         return obs, reward, terminated, truncated, info

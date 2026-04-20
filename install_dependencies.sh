@@ -51,6 +51,13 @@ if ! grep -q "source /opt/ros/humble/setup.bash" ~/.bashrc; then
   echo "ROS 2 Humble környezet hozzáadva a ~/.bashrc fájlhoz."
 fi
 
+# Ahhoz, hogy a pip3 --user által telepített parancsok (pl. tensorboard) fussanak, a ~/.local/bin könyvtárat hozzá kell adni a PATH-hoz!
+# Az alábbi sor BIZTONSÁGOSAN, alias formájában köti be a tensorboard parancsot, így GARANTÁLTAN nem piszkál bele a PATH változóba!
+if ! grep -q "alias tensorboard" ~/.bashrc; then
+  echo "alias tensorboard='~/.local/bin/tensorboard'" >> ~/.bashrc
+  echo "A tensorboard parancs direkt hivatkozása (alias) hozzáadva a ~/.bashrc fájlhoz."
+fi
+
 # Fontos: A Colcon fordítás (ament_cmake) számára be kell tölteni a ROS környezetet a fordítás ELŐTT is!
 source /opt/ros/humble/setup.bash
 

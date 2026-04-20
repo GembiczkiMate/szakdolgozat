@@ -6,6 +6,7 @@ import re
 import subprocess
 import tempfile
 from gazebo_msgs.srv import SpawnEntity, DeleteEntity, SetEntityState
+from std_srvs.srv import Empty
 
 from gazebo_utils import TrackGenerator
 
@@ -19,8 +20,28 @@ class GazeboEntityManager:
         self.spawn_client = self.node.create_client(SpawnEntity, '/spawn_entity')
         self.delete_client = self.node.create_client(DeleteEntity, '/delete_entity')
         self.set_state_client = self.node.create_client(SetEntityState, '/set_entity_state')
+        self.pause_client = self.node.create_client(Empty, '/pause_physics')
+        self.unpause_client = self.node.create_client(Empty, '/unpause_physics')
 
         self.track_version = 0
+
+    def pause_physics(self):
+        req = Empty.Request()
+        if self.pause_client.wait_for_service(timeout_sec=1.0):
+            try:
+                future = self.pause_client.call_async(req)
+                rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            except Exception:
+                pass
+
+    def unpause_physics(self):
+        req = Empty.Request()
+        if self.unpause_client.wait_for_service(timeout_sec=1.0):
+            try:
+                future = self.unpause_client.call_async(req)
+                rclpy.spin_until_future_complete(self.node, future, timeout_sec=2.0)
+            except Exception:
+                pass
 
     def reset_robot_position(self, spawn_x, spawn_y):
         """Reset robot to starting position without respawning (faster)."""
@@ -99,6 +120,16 @@ class GazeboEntityManager:
                 time.sleep(1.0)
         
         self.node.get_logger().error("A DeleteEntity service tartósan nem elérhető!")
+        
+        # JELZÉS KÜLDÉSE A WATCHDOGNAK, HOGY FULL RESTART KELL!
+        try:
+            with open('/tmp/gazebo_fatal_error.flag', 'w') as f:
+                f.write('FATAL: DeleteEntity tartósan nem elérhető')
+        except:
+            pass
+        os._exit(1) # Azonnal kinyírjuk a python scriptet hibakóddal
+        
+        self.unpause_physics()
         return False
 
     def spawn_entity(self, name, xml, x, y, z, roll=0.0, pitch=0.0, yaw=0.0):
@@ -202,15 +233,23 @@ class GazeboEntityManager:
             pass
         os._exit(1) # Azonnal kinyírjuk a python scriptet hibakóddal
         
+        self.unpause_physics()
         return False
 
     def respawn_line(self, track_points, spline_resolution, line_width):
+        self.pause_physics()
         # Delete existing line
+        # Clean up existing line
+        self.line_model_name = "track_line"
+        
+        # Try to delete old versioned leftovers once just in case we inherited a dirty world
+        if self.track_version == 0:
+            for i in range(1, 5):
+                self.delete_entity(f"track_line_v{i}")
+            self.track_version = 1 # Mark cleanup done
+            
         self.delete_entity(self.line_model_name)
         time.sleep(1.0)  # Késleltetés a törlés után a szimulátor teljesítményéhez
-        
-        self.track_version += 1
-        self.line_model_name = f"track_line_v{self.track_version}"
         
         # Generate spline points
         spline_points = TrackGenerator._catmull_rom_spline(track_points, spline_resolution)
@@ -271,3 +310,5 @@ class GazeboEntityManager:
             self.node.get_logger().debug(f"Track line spawned")
         else:
             self.node.get_logger().warn("Failed to spawn track line")
+        
+        self.unpause_physics()

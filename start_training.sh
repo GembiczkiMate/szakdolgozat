@@ -2,13 +2,17 @@
 
 # A Cyclone DDS hálózati réteg engedélyezése az instabilitások és szerviz fagyások elkerülése végett
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+# Ennek az egy ROS2 változónak az értéke pontosan ugyanazt éri el,
+# belsőleg átkonfigurálja a hálózatot localhost-ra.
+export ROS_LOCALHOST_ONLY=1
 
 # Source the ROS 2 setup configuration
 source install/setup.bash
 
 echo "Starting Gazebo Simulation..."
 # Start Gazebo in the background
-ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py headless:=True &
+HEADLESS_PARAM=${GAZEBO_HEADLESS:-True}
+ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py headless:=$HEADLESS_PARAM &
 GAZEBO_PID=$!
 
 echo "Waiting for 3 seconds to let Gazebo initialize..."
