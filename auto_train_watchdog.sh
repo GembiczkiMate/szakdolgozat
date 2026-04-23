@@ -6,7 +6,7 @@ export ROS_LOCALHOST_ONLY=1
 source install/setup.bash
 
 # Beállítások
-TIMEOUT_LIMIT=240       # Hány másodperc elérhetetlenség után lője ki (240 mp = 4 perc)
+TIMEOUT_LIMIT=120       # Hány másodperc elérhetetlenség után lője ki (120 mp = 2 perc)
 CHECK_INTERVAL=10       # Hány másodpercenként csekkolja a rendszert
 
 echo "*********************************************************"
@@ -47,6 +47,8 @@ cleanup_and_exit() {
     echo "[WATCHDOG] Kézi leállítás (Ctrl+C) észlelve!"
     echo "[WATCHDOG] Minden folyamat végleges leállítása és kilépés..."
     echo "====================================================="
+    pkill -SIGINT -f train.py 2>/dev/null
+    sleep 3
     kill -9 $MAIN_PID 2>/dev/null
     pkill -9 -f train.py 2>/dev/null
     pkill -9 -f gzserver 2>/dev/null
@@ -85,6 +87,8 @@ while true; do
             echo "[WATCHDOG] Folyamatok azonnali lelövése és újraindítása..."
             echo "====================================================="
             rm -f /tmp/gazebo_fatal_error.flag
+            pkill -SIGINT -f train.py 2>/dev/null
+            sleep 3
             kill -9 $MAIN_PID 2>/dev/null
             pkill -9 -f train.py 2>/dev/null
             pkill -9 -f gzserver 2>/dev/null
@@ -111,6 +115,8 @@ while true; do
                 echo "[WATCHDOG] Folyamatok azonnali lelövése és újraindítása..."
                 echo "====================================================="
                 
+                pkill -SIGINT -f train.py 2>/dev/null
+                sleep 3
                 kill -9 $MAIN_PID 2>/dev/null
                 pkill -9 -f train.py 2>/dev/null
                 pkill -9 -f gzserver 2>/dev/null

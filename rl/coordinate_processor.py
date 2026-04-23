@@ -2,47 +2,43 @@ import math
 
 class CoordinateProcessor:
     def __init__(self, max_allowed_deviation_meters=0.4):
-        """
-        Kezeli a koordináta alapú hibaszámítást.
-        max_allowed_deviation_meters: Milyen messze mehet fizikai méterben a vonaltól, mielőtt terminál.
-        """
         self.spline_points = []
         self.max_allowed_deviation = max_allowed_deviation_meters
         
     def update_track_spline(self, spline_points):
-        """
-        Frissíti a jelenlegi pálya finomított (spline) pontjait, ami alapján a távolságot számoljuk.
-        Ezt generáláskor hívjuk meg.
-        """
         self.spline_points = spline_points
         
-    def calculate_error_and_termination(self, robot_x, robot_y):
-        """
-        Kiszámolja a legközelebbi pályaponttól való fizikai távolságot.
+    def _point_to_line_dist(self, px, py, x1, y1, x2, y2):
+        px, py = float(px), float(py)
+        x1, y1 = float(x1), float(y1)
+        x2, y2 = float(x2), float(y2)
         
-        Returns:
-            normalized_error: 0.0 (tökéletesen rajta) és 1.0 (maximális megengedett távolságon) között.
-            terminated: True, ha elhagyta a pályát (messzebb van a megengedettnél).
-        """
-        if not self.spline_points:
-            # Ha nincs pálya betöltve, azonnali terminálás (biztonsági okokból)
+        dx, dy = x2 - x1, y2 - y1
+        if dx == 0 and dy == 0:
+            return math.sqrt((px - x1)**2 + (py - y1)**2)
+            
+        t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+        t = max(0.0, min(1.0, t))
+        
+        closest_x = x1 + t * dx
+        closest_y = y1 + t * dy
+        
+        return math.sqrt((px - closest_x)**2 + (py - closest_y)**2)
+
+    def calculate_error_and_termination(self, robot_x, robot_y):
+        if not self.spline_points or len(self.spline_points) < 2:
             return 1.0, True
             
-        # Keresés a legközelebbi pontra a Catmull-Rom spline-on
         min_dist = float('inf')
-        for p in self.spline_points:
-            dist = math.sqrt((robot_x - p[0])**2 + (robot_y - p[1])**2)
+        for i in range(len(self.spline_points) - 1):
+            p1 = self.spline_points[i]
+            p2 = self.spline_points[i + 1]
+            dist = self._point_to_line_dist(robot_x, robot_y, p1[0], p1[1], p2[0], p2[1])
             if dist < min_dist:
                 min_dist = dist
                 
-        # min_dist a méterben vett távolság.
-        # Normalizáljuk a max_allowed_deviation alapján, hogy kompatibilis legyen a régi reward_calculator bemenetével
         normalized_error = min_dist / self.max_allowed_deviation
-        
-        # Ha a távolság nagyobb, mint a megengedett, az epizód véget ér
         terminated = min_dist > self.max_allowed_deviation
-        
-        # Határoljuk be a normalizált hibát 0 és 1 közé bizonságképpen
         normalized_error = min(max(normalized_error, 0.0), 1.0)
         
         return normalized_error, terminated

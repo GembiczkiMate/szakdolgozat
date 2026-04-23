@@ -37,7 +37,7 @@ class RosLineFollowEnv(gym.Env, Node):
     
     
     # Number of interpolation points between each control point
-    SPLINE_RESOLUTION = 20
+    SPLINE_RESOLUTION = 8
 
     def __init__(self, is_testing_mode=False, reward_mode='vision'):
         # Initialize the Gym Environment and the ROS2 Node
@@ -45,6 +45,10 @@ class RosLineFollowEnv(gym.Env, Node):
         Node.__init__(self, 'ros_line_follow_env')
         
         self.is_testing_mode = is_testing_mode
+        self.sequential_mode = False
+        self.current_track_index = 0
+        self.sequential_mode = False
+        self.current_track_index = 0
         self.reward_mode = reward_mode
         self.get_logger().info(f"Environment initialized in {'TESTING' if is_testing_mode else 'TRAINING'} mode. Reward system: {self.reward_mode.upper()}")
 
@@ -66,7 +70,11 @@ class RosLineFollowEnv(gym.Env, Node):
         # Actual robotic limits are scaled in the step() function.
         self.max_speed = 0.5    
         self.max_turn = 1.5     
-        self.action_space = spaces.Box(low=np.array([0.0, -self.max_turn]), high=np.array([self.max_speed, self.max_turn]), dtype=np.float32)
+        self.action_space = spaces.Box(
+            low=np.array([0.0, -self.max_turn], dtype=np.float32), 
+            high=np.array([self.max_speed, self.max_turn], dtype=np.float32), 
+            dtype=np.float32
+        )
         
         # RAW Image observation space: Full camera image (RGB)
         # Using camera resolution - no resizing, no grayscale conversion
@@ -111,6 +119,7 @@ class RosLineFollowEnv(gym.Env, Node):
         self.bridge = CvBridge()
         self.latest_image = None
         self.image_received = False
+        self.missed_images = 0
         
         # --- Robot Position Tracking ---
         self.robot_x = self.SPAWN_X
@@ -153,8 +162,13 @@ class RosLineFollowEnv(gym.Env, Node):
 
     def _setup_and_reset_environment(self):
         """Set up the environment initially, and reset the robot position on subsequent calls."""
-        # Randomize track
-        new_track = random.choice(self.PREDEFINED_TRACKS)
+        # Ha sequential mode be van kapcsolva, sorban megyünk!
+        if getattr(self, 'sequential_mode', False):
+            new_track = self.PREDEFINED_TRACKS[self.current_track_index]
+            self.current_track_index = (self.current_track_index + 1) % len(self.PREDEFINED_TRACKS)
+        else:
+            new_track = random.choice(self.PREDEFINED_TRACKS)
+        
         track_changed = False
         if new_track != self.TRACK_POINTS:
             track_changed = True
@@ -182,15 +196,33 @@ class RosLineFollowEnv(gym.Env, Node):
             time.sleep(0.5)  # Wait for line to appear
             return
             
-        # If we selected a new track, respawn the line
+        # CRITICAL FIX for Gazebo Exit Code -11 Segfault:
+        # First lift the robot up in the air so it is NOT touching the floor.
+        # This prevents the ODE physics engine from experiencing infinite collision forces when the track (kinematic object) is teleported under it!
+        self.gazebo_manager.reset_robot_position(self.SPAWN_X, self.SPAWN_Y)
+        
+        # CRITICAL FIX for GPU/OGRE Exit Code -11 Segfaults:
+        # DO NOT use pause_physics() as it deadlocks with hardware acceleration.
+        # DO NOT teleport visual tracks while the camera is pointed at them (causes Scene BVH crashes).
+        # SOLUTION: "Szemeltakarás". Teleport the robot far away into empty space first!
+        self.gazebo_manager.reset_robot_position(500.0, 500.0) # Park robot far away and fall in empty space
+        time.sleep(0.2) # Let the camera render empty frames
+        
+        # Move the kinematic tracks around while the camera isn't looking at them!
         if track_changed:
             self.get_logger().info(f"Selected predefined track finish line at ({self.FINISH_X}, {self.FINISH_Y})")
             self.gazebo_manager.respawn_line(self.TRACK_POINTS, self.SPLINE_RESOLUTION, self.current_line_width)
+            time.sleep(0.3)
         
-        # On subsequent resets, just reset the robot position to the start of the current track
+        # Bring the robot back and drop it properly at the start frame
         success = self.gazebo_manager.reset_robot_position(self.SPAWN_X, self.SPAWN_Y)
+        time.sleep(0.3)
+
         if not success:
             self.gazebo_manager.respawn_robot(self.SPAWN_X, self.SPAWN_Y, self.current_camera_pitch)
+        
+        # Minimális szünet teleport után, nehogy még esésben lévő/rossz pozíciót kapjon lencsevégre a kamera
+        time.sleep(0.1)
 
     def _get_obs(self):
         if self.latest_image is None:
@@ -247,6 +279,19 @@ class RosLineFollowEnv(gym.Env, Node):
         start_time = time.time()
         while not self.image_received and (time.time() - start_time) < 1.0:
             rclpy.spin_once(self, timeout_sec=0.01)
+            
+        if not self.image_received:
+            self.missed_images += 1
+            if self.missed_images >= 5:
+                import os
+                import sys
+                open("/tmp/gazebo_fatal_error.flag", "w").close()
+                self.get_logger().error("5 CONSECUTIVE IMAGE TIMEOUTS. GAZEBO IS DEAD. TRIGGERING WATCHDOG.")
+                sys.exit(1)
+        else:
+            self.missed_images = 0
+            
+      
 
         # 3. Get observation and calculate reward
         obs, error, terminated, self.last_line_area = self._get_obs()
@@ -300,6 +345,10 @@ class RosLineFollowEnv(gym.Env, Node):
         
         # Stop the robot
         self.publisher_.publish(Twist())
+        
+        import time
+        # Vizuális szünet az epizódok között, hogy jól látszódjon a végeredmény (esés vagy győzelem)
+        time.sleep(0.5)
         
         # Reset finish line state
         self.finished = False

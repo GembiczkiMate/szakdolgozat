@@ -5,6 +5,10 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 # Ennek az egy ROS2 változónak az értéke pontosan ugyanazt éri el,
 # belsőleg átkonfigurálja a hálózatot localhost-ra.
 export ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=42  # Elszigetelés a háttérben futó hibás DDS csomagoktól
+# A Gazebo memóriaszivárgásának tolerálása (ritkítja a malloc error-t)
+export MALLOC_CHECK_=0
+export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
 
 # Source the ROS 2 setup configuration
 source install/setup.bash

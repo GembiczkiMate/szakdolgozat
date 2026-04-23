@@ -1,3 +1,5 @@
+import os
+
 import rclpy
 import os
 import numpy as np
@@ -21,10 +23,14 @@ def main():
     # Itt is_testing_mode=False azért kell, hogy azokon a pályákon értékelje ki magát,
     # amiken a betanítás is zajlott. A modell itt már Hálózatot nem frissít, csak prediktál!
     env = RosLineFollowEnv(is_testing_mode=False, reward_mode=args.reward_mode)
+    env.sequential_mode = True # Sorban menjen végig
+    env.current_track_index = 0 # Kezdje a legelsővel
+    env.sequential_mode = True # Sorban menjen végig
+    env.current_track_index = 0 # Kezdje a legelsővel
     
     # Megkeressük az elmentett modellfájlt (model.zip) a mapparendszerben
     package_share_dir = get_package_share_directory('two_wheeled_robot')
-    workspace_dir = os.path.join(package_share_dir, '..', '..', '..', '..')
+    workspace_dir = '/media/gembi/4a3cde59-7329-4c35-983a-99689c6819c0/rl_ros/src/two_wheeled_robot'
     folder_name = f"ppo_line_follower_{args.reward_mode}"
     save_dir = os.path.abspath(os.path.join(workspace_dir, folder_name))
     model_path = os.path.join(save_dir, "model.zip")
@@ -38,7 +44,7 @@ def main():
     # Betöltjük a mesterséges intelligenciát a korábban tanult "súlyokkal" (tudással)
     model = PPO.load(model_path, env=env)
     
-    NUM_EPISODES = 10  # Hány pályát fusson le a teszthez
+    NUM_EPISODES = len(env.PREDEFINED_TRACKS)  # Pontosan egyszer menjen végig minden pályán!
     total_rewards = []
     success_count = 0
     

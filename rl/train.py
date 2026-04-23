@@ -1,3 +1,5 @@
+import os
+
 import rclpy
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_checker import check_env
@@ -16,13 +18,13 @@ from stable_baselines3.common.logger import configure
 # ============================================================================
 
 # --- Training Parameters ---
-TOTAL_TIMESTEPS = 10000000    # Nagyon magasra állítva, hogy folyamatosan fusson és naplózzon egyetlen vonalként
+TOTAL_TIMESTEPS = 20000    # Nagyon magasra állítva, hogy folyamatosan fusson és naplózzon egyetlen vonalként
 LOG_INTERVAL = 1              # Log every N episodes
 
 # --- PPO Algorithm Parameters ---
 PPO_HYPERPARAMS = {
     "learning_rate": 2.5e-4,    # Megnövelt tanulási ráta, hogy gyorsabban tanuljon az új környezetből
-    "n_steps": 512,           
+    "n_steps": 2048,           
     "batch_size": 128,         
     "n_epochs": 10,           
     "gamma": 0.99,            
@@ -98,11 +100,27 @@ def main():
     model_save_path = os.path.join(save_dir, "model")
     tensorboard_log_dir = os.path.join(save_dir, "logs")
     
-    # Check if a pre-trained model exists
-    if os.path.exists(model_save_path + ".zip"):
+    # Check if a pre-trained model exists and is not an empty file
+    import zipfile
+    is_valid_zip = False
+    if os.path.exists(model_save_path + ".zip") and os.path.getsize(model_save_path + ".zip") > 0:
+        try:
+            with zipfile.ZipFile(model_save_path + ".zip") as zf:
+                is_valid_zip = True
+        except zipfile.BadZipFile:
+            print("WARNING: Existing model.zip is corrupted (e.g. interrupted save). Ignoring it and creating a new one.")
+            
+    if is_valid_zip:
         print("Loading existing model...")
         # Fontos: Custom objects-ben adjuk át a megváltozott hiperparamétereket a .zip-nek!
-        model = PPO.load(model_save_path, env=env, custom_objects=PPO_HYPERPARAMS)
+        try:
+            model = PPO.load(model_save_path, env=env, custom_objects=PPO_HYPERPARAMS)
+        except AssertionError as e:
+            if "No data found in the saved file" in str(e):
+                print("WARNING: Existing model is missing data (AssertionError). Creating a new one...")
+                model = PPO("MlpPolicy", env, verbose=1, tensorboard_log=tensorboard_log_dir, **PPO_HYPERPARAMS)
+            else:
+                raise e
         
         # --- ERŐLTETETT KÍSÉRLETEZÉS KIKAPCSOLVA ---
         # A korábbi "variance hack" (log_std kényszerítése) itt ki lett véve, 
@@ -125,19 +143,25 @@ def main():
         )
 
     # --- 3. Train the agent ---
-    # Set explicit logger to forcefully append into the same physical folder
-    custom_logger = configure(os.path.join(tensorboard_log_dir, "PPO_unified"), ["stdout", "tensorboard"])
-    model.set_logger(custom_logger)
-    
+    # Try to clean up logger logic to append natively
     try:
         # Train for a specified number of timesteps
+        # We enforce reset_num_timesteps=False so it resumes counting from where it left off,
+        # but to successfully append to Tensorboard exactly, tb_log_name must remain stable
+        # AND reset_num_timesteps=False inside learn().
         auto_save_callback = CustomSaveCallback(save_path=model_save_path, save_freq=1000)
-        model.learn(total_timesteps=TOTAL_TIMESTEPS, log_interval=LOG_INTERVAL, reset_num_timesteps=False, callback=auto_save_callback)
+        model.learn(total_timesteps=TOTAL_TIMESTEPS, log_interval=LOG_INTERVAL, reset_num_timesteps=False, tb_log_name="PPO_unified", callback=auto_save_callback)
         print("Training finished. Saving model...")
-        model.save(model_save_path)
+        tmp_path = model_save_path + "_tmp"
+        model.save(tmp_path)
+        if os.path.exists(tmp_path + ".zip"):
+            os.replace(tmp_path + ".zip", model_save_path + ".zip")
     except (KeyboardInterrupt, BaseException) as e:
         print(f"Training interrupted ({e}). Saving model...")
-        model.save(model_save_path)
+        tmp_path = model_save_path + "_tmp"
+        model.save(tmp_path)
+        if os.path.exists(tmp_path + ".zip"):
+            os.replace(tmp_path + ".zip", model_save_path + ".zip")
     finally:
         env.close()
 

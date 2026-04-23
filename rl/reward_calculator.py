@@ -1,7 +1,7 @@
 import math
 
 class RewardCalculator:
-    def __init__(self, max_speed=0.5, max_turn=1.7, finish_reward=500.0, stationary_threshold=0.1):
+    def __init__(self, max_speed=0.5, max_turn=1.7, finish_reward=300.0, stationary_threshold=0.1):
         self.max_speed = max_speed
         self.max_turn = max_turn
         self.finish_reward = finish_reward
@@ -50,7 +50,7 @@ class RewardCalculator:
         reward = (progress_reward + survival_bonus - 
                   stationary_penalty - 
                   smoothness_penalty - 
-                  steering_penalty) * 10.0  # Scale up for stronger signal
+                  steering_penalty) * 5.0  # Scale up for stronger signal
         return reward
         
     def calculate_termination_reward(self, terminated, crossed_finish, current_step, grace_period=5):
@@ -69,6 +69,6 @@ class RewardCalculator:
                 # Grace period at the beginning of the episode to find the line
                 return 0.0, False
             else:
-                return -300.0, True  # Larger penalty to discourage falling off
+                return -100.0, True  # Larger penalty to discourage falling off
                 
         return 0.0, terminated
