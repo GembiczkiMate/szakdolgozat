@@ -4,8 +4,6 @@
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=42  # Teljes elszigetelés a háttérben futó egyéb hálózatoktól
-export MALLOC_CHECK_=0
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
 
 echo "========================================================="
 echo " EVALUATION (VALIDÁCIÓ) - STATISZTIKA GYŰJTÉS NYITOTT GAZEBÓVAL"
@@ -39,7 +37,7 @@ export GAZEBO_HEADLESS="False"
 ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py headless:=False &
 GAZEBO_PID=$!
 
-echo "Waiting for 3 seconds to let Gazebo initialize..."
+echo "Waiting for 3 seconds to let Gazebo initialize (especially for GUI mode)..."
 sleep 3
 
 echo "Starting Model Evaluation (Validation) for $REWARD_MODE..."

@@ -3,8 +3,7 @@
 # A Cyclone DDS hálózati réteg engedélyezése az instabilitások és szerviz fagyások elkerülése végett
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_LOCALHOST_ONLY=1
-export MALLOC_CHECK_=0
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
+export ROS_DOMAIN_ID=42
 
 echo "========================================================="
 echo " TESTING (VÉGTELEN FUTÁS) - VIZUÁLIS TESZT NYITOTT GAZEBÓVAL"
@@ -34,7 +33,7 @@ export GAZEBO_HEADLESS="False"
 ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py headless:=False &
 GAZEBO_PID=$!
 
-echo "Waiting for 3 seconds to let Gazebo initialize..."
+echo "Waiting for 3 seconds to let Gazebo initialize (especially for GUI mode)..."
 sleep 3
 
 echo "Starting Model Testing (Infinite loop) for $REWARD_MODE..."

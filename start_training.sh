@@ -6,9 +6,6 @@ export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 # belsőleg átkonfigurálja a hálózatot localhost-ra.
 export ROS_LOCALHOST_ONLY=1
 export ROS_DOMAIN_ID=42  # Elszigetelés a háttérben futó hibás DDS csomagoktól
-# A Gazebo memóriaszivárgásának tolerálása (ritkítja a malloc error-t)
-export MALLOC_CHECK_=0
-export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libjemalloc.so.2
 
 # Source the ROS 2 setup configuration
 source install/setup.bash
@@ -19,7 +16,7 @@ HEADLESS_PARAM=${GAZEBO_HEADLESS:-True}
 ros2 launch two_wheeled_robot load_world_into_gazebo.launch.py headless:=$HEADLESS_PARAM &
 GAZEBO_PID=$!
 
-echo "Waiting for 3 seconds to let Gazebo initialize..."
+echo "Waiting for 3 seconds to let Gazebo initialize (especially for GUI mode)..."
 sleep 3
 
 echo "Starting Training Script..."

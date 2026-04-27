@@ -1,10 +1,11 @@
 import math
 
 class RewardCalculator:
-    def __init__(self, max_speed=0.5, max_turn=1.7, finish_reward=300.0, stationary_threshold=0.1):
+    def __init__(self, max_speed=0.5, max_turn=1.7, finish_reward=300.0, reward_mode='vision', stationary_threshold=0.1):
         self.max_speed = max_speed
         self.max_turn = max_turn
         self.finish_reward = finish_reward
+        self.reward_mode = reward_mode
         self.stationary_threshold = stationary_threshold 
         
         
@@ -15,42 +16,63 @@ class RewardCalculator:
         
         Returns:
             reward: The calculated float reward
-            smoothness_penalty: The deducted penalty for swinging/vibrating steering
         """
-        # Stability factor (0 to 1) 
-        # A -4.5 (a korábbi -6.5 helyett) "szélesíti" az elfogadható zónát a kanyarokban. 
-        # Így egy éles kanyarban kapott ~35%-os vizuális elcsúszásra nem büntet annyira durván, nem veszi el a mozgásért kapott pontot!
+        if self.reward_mode == 'coordinate':
+            return self._calculate_coordinate_reward(error, linear_speed, angular_speed, prev_angular_speed)
+        else:
+            return self._calculate_vision_reward(error, linear_speed, angular_speed, prev_angular_speed)
+
+    def _calculate_coordinate_reward(self, error, linear_speed, angular_speed, prev_angular_speed):
+        # Szigorúbb büntetések, melyek koordináta módhoz lettek optimalizálva (nincs zaj)
         stability_factor = math.exp(-6.5 * abs(error))
-
-        # Speed factor (0 to 1, moving at max_speed = 1)
         speed_factor = max(0.0, linear_speed) / self.max_speed
-
-        # Core Progress Reward: The robot MUST move forward to get ANY points.
-        # It gets the most points by going fast AND staying centered.
         progress_reward = speed_factor * stability_factor
 
-        # ALAPVETŐ ÉLETBEN MARADÁSI BÓNUSZ (Survival Bonus)
-        # Ez garantálja, hogy a pályán töltött minden lépés mindig fixen pozitív irányba mozdítsa a mérleget, 
-        # akkor is, ha kanyarog vagy lassú!
-        survival_bonus = 0.5
-
-        # Penalty for standing still (moves too slow)
+        survival_bonus = 0.25
         stationary_penalty = 0.5 if linear_speed < self.stationary_threshold else 0.0
         
-        # --- Smoothness and Steering Penalties ---
-        # Penalize large changes in steering ("vibration")
         steering_change = abs(angular_speed - prev_angular_speed)
-        # Scaled penalty so max change gets 0.5 penalty points
-        smoothness_penalty = (steering_change / (2.0 * self.max_turn)) * 0.1 
-        
-        # Penalize constant high steering (zig-zagging/weaving)
-        steering_penalty = (abs(angular_speed) / self.max_turn) * 0.03
+        smoothness_penalty = (steering_change / (2.0 * self.max_turn)) * 0.5 
+        steering_penalty = (abs(angular_speed) / self.max_turn) * 0.25
 
-        # Combined weighted reward
         reward = (progress_reward + survival_bonus - 
                   stationary_penalty - 
                   smoothness_penalty - 
-                  steering_penalty) * 5.0  # Scale up for stronger signal
+                  steering_penalty) * 5.0 
+        return reward
+
+    def _calculate_vision_reward(self, error, linear_speed, angular_speed, prev_angular_speed):
+        # Megengedőbb jutalmazás a kamerás (vision) módhoz, ami zajosabb lehet
+        # A -4.5 "szélesíti" az elfogadható zónát a kanyarokban a -6.5 helyett
+        stability_factor = math.exp(-4.5 * abs(error))
+        speed_factor = max(0.0, linear_speed) / self.max_speed
+        # NAGYON erős súly a progress_reward-ra, hogy előre menjen!
+
+        # Még erősebb súly az előrehaladásra!
+        progress_reward = speed_factor * stability_factor * 4.0
+
+        # Csökkentett túlélési bónusz, hogy ne érje meg csak "életben maradni"
+        survival_bonus = 0.1
+
+        # Kevésbé szigorú büntetés az egyhelyben állásért
+        stationary_penalty = 0.25 if linear_speed < self.stationary_threshold else 0.0
+
+        # Szigorúbb büntetés a kormányzás változásáért (0.2 a 0.1 helyett)
+        steering_change = abs(angular_speed - prev_angular_speed)
+        smoothness_penalty = (steering_change / (2.0 * self.max_turn)) * 0.2
+
+        # Szigorúbb büntetés folyamatos kanyarodásért (0.08 a 0.03 helyett)
+        steering_penalty = (abs(angular_speed) / self.max_turn) * 0.08
+
+        # Sáv elhagyása elleni büntetés, ha a vonal kimegy a kényelmes középső sávból (error > 0.5)
+        off_center_penalty = max(0.0, (abs(error) - 0.5)) * 1.5
+
+        # Combined weighted reward
+        reward = (progress_reward + survival_bonus - 
+              stationary_penalty - 
+              smoothness_penalty - 
+              steering_penalty -
+              off_center_penalty) * 5.0  # Scale up for stronger signal
         return reward
         
     def calculate_termination_reward(self, terminated, crossed_finish, current_step, grace_period=5):

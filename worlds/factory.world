@@ -2044,6 +2044,5 @@
       <pose>-7.261170 -0.803 0.0 0.0 0.0 0.0</pose>
       <uri>model://conveyor</uri>
     </include>
-    <!-- Track line is now dynamically spawned by ros_line_follow_env.py with Catmull-Rom spline -->
-  </world>
+   </world>
 </sdf>

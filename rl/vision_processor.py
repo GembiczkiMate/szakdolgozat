@@ -2,9 +2,20 @@ import numpy as np
 import cv2
 
 class VisionProcessor:
-    def __init__(self, img_height=240, img_width=320):
+    def __init__(self, img_height=240, img_width=320, reward_mode='vision'):
         self.img_height = img_height
         self.img_width = img_width
+        self.reward_mode = reward_mode
+        
+        # Dinamikus küszöbértékek a mód alapján
+        if self.reward_mode == 'coordinate':
+            self.min_line_area = 80
+            self.max_deviation_ratio = 0.4
+        else:
+            # Szigorúbb vision mód beállítások: a kép közepétől csak 35%-ot térhet el
+            # és legalább 150 pixel területet kell lásson a piros vonalból
+            self.min_line_area = 150
+            self.max_deviation_ratio = 0.35
         
     def process_image(self, frame):
         """
@@ -38,7 +49,8 @@ class VisionProcessor:
             c = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(c)
             
-            if area > 80:
+            # Dinamikus küszöb használata fix 80 helyett
+            if area > self.min_line_area:
                 M = cv2.moments(c)
                 if M['m00'] > 0:
                     cx = int(M['m10'] / M['m00'])
@@ -46,8 +58,8 @@ class VisionProcessor:
                     # 1. Calculate the error in pixels from the center
                     pixel_error = width / 2 - cx
             
-                    # 2. Check if it deviates more than 40% from the center
-                    max_allowed_deviation = width * 0.4
+                    # 2. Check if it deviates more than the allowed percentage from the center
+                    max_allowed_deviation = width * self.max_deviation_ratio
                     terminated = abs(pixel_error) > max_allowed_deviation
             
                     # 3. Calculate the normalized error

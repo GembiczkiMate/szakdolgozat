@@ -47,7 +47,7 @@ class GazeboEntityManager:
             except Exception:
                 pass
 
-    def reset_robot_position(self, spawn_x, spawn_y):
+    def reset_robot_position(self, spawn_x, spawn_y, yaw=-3.14):
         """Reset robot to starting position without respawning (faster)."""
         success = False
 
@@ -56,14 +56,14 @@ class GazeboEntityManager:
             try:
                 req = SetEntityState.Request()
                 req.state.name = self.robot_name
+                req.state.reference_frame = "world"
                 req.state.pose.position.x = float(spawn_x)
                 req.state.pose.position.y = float(spawn_y)
-                req.state.pose.position.z = 0.2
+                req.state.pose.position.z = 0.1  # Minimum safe height for 0.14m wheels to not clip into the ground
                 
-                # Yaw = -3.14
                 import math
-                cy = math.cos(-3.14 * 0.5)
-                sy = math.sin(-3.14 * 0.5)
+                cy = math.cos(yaw * 0.5)
+                sy = math.sin(yaw * 0.5)
                 req.state.pose.orientation.w = cy
                 req.state.pose.orientation.z = sy
                 req.state.pose.orientation.x = 0.0
@@ -88,8 +88,8 @@ class GazeboEntityManager:
             # Fallback
             cmd = [
                 "gz", "model", "-m", self.robot_name,
-                "-x", str(spawn_x), "-y", str(spawn_y), "-z", "0.2",
-                "-Y", "-3.14" 
+                "-x", str(spawn_x), "-y", str(spawn_y), "-z", "0.05",
+                "-Y", str(yaw) 
             ]
             for _ in range(3):
                 try:
@@ -191,7 +191,7 @@ class GazeboEntityManager:
         self.node.get_logger().warn(f"API spawn failed for {name}. Returning False to retry.")
         return False
 
-    def respawn_robot(self, spawn_x, spawn_y, current_camera_pitch):
+    def respawn_robot(self, spawn_x, spawn_y, current_camera_pitch, yaw=-3.14):
         """Delete and respawn the robot with modified camera pitch."""
         max_retries = 3
         
@@ -214,7 +214,7 @@ class GazeboEntityManager:
                     self.robot_name,
                     modified_urdf,
                     spawn_x, spawn_y, 0.2,
-                    yaw=-3.14  # Facing -X direction
+                    yaw=yaw  # Facing requested direction
                 )
                 
                 if success:
@@ -357,6 +357,7 @@ class GazeboEntityManager:
                 try:
                     req = SetEntityState.Request()
                     req.state.name = model_name
+                    req.state.reference_frame = "world"
                     # Only teleport Z coordinate! 
                     # Keep X,Y at 0 so we just move it underground!
                     req.state.pose.position.x = 0.0

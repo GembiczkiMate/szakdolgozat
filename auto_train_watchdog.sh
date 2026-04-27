@@ -3,6 +3,7 @@
 # ROS beállítása a szervizek lekérdezéséhez
 export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 export ROS_LOCALHOST_ONLY=1
+export ROS_DOMAIN_ID=42
 source install/setup.bash
 
 # Beállítások

@@ -24,7 +24,7 @@ LOG_INTERVAL = 1              # Log every N episodes
 # --- PPO Algorithm Parameters ---
 PPO_HYPERPARAMS = {
     "learning_rate": 2.5e-4,    # Megnövelt tanulási ráta, hogy gyorsabban tanuljon az új környezetből
-    "n_steps": 2048,           
+    "n_steps": 2048,             # Nagyobb n_steps a stabilabb tanulásért (pl. 2048 -> 8192)
     "batch_size": 128,         
     "n_epochs": 10,           
     "gamma": 0.99,            

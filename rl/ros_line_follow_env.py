@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Image
 from nav_msgs.msg import Odometry
@@ -37,7 +38,10 @@ class RosLineFollowEnv(gym.Env, Node):
     
     
     # Number of interpolation points between each control point
-    SPLINE_RESOLUTION = 8
+    # A nagyobb felbontás (pl. 8-ról 20-ra állítva) sokkal finomabb, kerekebb íveket (spline-okat) 
+    # generál a távoli referenciapontok közé, ami egyrészt megakadályozza, hogy a koordináták 
+    # alapján szögletesnek érzékelje a pályát, másrészt a kamerán is íveltebb a vonal.
+    SPLINE_RESOLUTION = 20
 
     def __init__(self, is_testing_mode=False, reward_mode='vision'):
         # Initialize the Gym Environment and the ROS2 Node
@@ -70,6 +74,21 @@ class RosLineFollowEnv(gym.Env, Node):
         # Actual robotic limits are scaled in the step() function.
         self.max_speed = 0.5    
         self.max_turn = 1.5     
+        
+        # --- Physical Speed Limits based on Reward Mode ---
+        # Koordináta mód: pontosabb adatok, nagyobb sebességet is elbír
+        # Vision (Kamerás) mód: lassabb haladás ajánlott, de jelenleg fel van turbózva a gyorsabb teszteléshez
+        if self.reward_mode == 'coordinate':
+            self.phys_max_linear = 0.25    # EREDETI: max sebesség
+            self.phys_max_angular = 1.1   # EREDETI: max kanyarodás
+            self.phys_angular_clip = 1.3  # EREDETI: max kanyar plafon
+        else:
+            self.phys_max_linear = 0.5   # Jelentősen megemelve (0.2-ről 0.35-re)
+            self.phys_max_angular = 1.1   # Finomabb kanyarodás, de feljebb véve (0.8-ról 1.1-re) a tempóhoz
+            self.phys_angular_clip = 1.3  # Lazább fizikai plafon a gyorsabb kanyarokhoz
+            
+        self.get_logger().info(f"Physical speed scale Limits - Linear: {self.phys_max_linear}, Angular: {self.phys_max_angular}")
+
         self.action_space = spaces.Box(
             low=np.array([0.0, -self.max_turn], dtype=np.float32), 
             high=np.array([self.max_speed, self.max_turn], dtype=np.float32), 
@@ -90,14 +109,26 @@ class RosLineFollowEnv(gym.Env, Node):
         )
 
         # --- Extracted Modules ---
-        self.vision_processor = VisionProcessor(self.img_height, self.img_width)
+        self.vision_processor = VisionProcessor(self.img_height, self.img_width, self.reward_mode)
         self.coordinate_processor = CoordinateProcessor(max_allowed_deviation_meters=0.15) # Távolság lecsökkentve 15 cm-re (a kamera látószögének megfelelő szélesség)
-        self.reward_calculator = RewardCalculator(self.max_speed, self.max_turn, self.FINISH_REWARD)
+        self.reward_calculator = RewardCalculator(self.max_speed, self.max_turn, self.FINISH_REWARD, self.reward_mode)
 
         # --- ROS2 Connections ---
         self.publisher_ = self.create_publisher(Twist, '/cmd_vel', 10)
-        self.subscription = self.create_subscription(Image, '/line_camera/image_raw', self.image_callback, 10)
-        self.odom_subscription = self.create_subscription(Odometry, '/odom', self.odom_callback, 10)
+        
+        # QUALITY OF SERVICE (QoS) Módosítás: A C++ (Gazebo) sensor pluginok 'Best Effort' (SensorData) jelet küldenek,
+        # amit default (10) 'Reliable' opcióval feliratkozva inkompatibilissé, azaz Láthatatlanná tenné a Cyclonedds hálózaton!!!
+        self.subscription = self.create_subscription(
+            Image, 
+            '/line_camera/image_raw', 
+            self.image_callback, 
+            qos_profile_sensor_data)
+            
+        self.odom_subscription = self.create_subscription(
+            Odometry, 
+            '/odom', 
+            self.odom_callback, 
+            qos_profile_sensor_data)
         
         # Path to URDF file
         self.urdf_path = os.path.join(
@@ -160,6 +191,15 @@ class RosLineFollowEnv(gym.Env, Node):
         )
         return distance_to_finish < self.FINISH_RADIUS
 
+    def spin_sleep(self, duration):
+        """
+        Biztonságos várakozás, ami alatt a ROS 2 callbackek folyamatosan futnak.
+        Így nem gyűlnek fel régi, 'teleportálás közbeni' fals adatok a queue-ban.
+        """
+        start_time = time.time()
+        while (time.time() - start_time) < duration:
+            rclpy.spin_once(self, timeout_sec=0.01)
+
     def _setup_and_reset_environment(self):
         """Set up the environment initially, and reset the robot position on subsequent calls."""
         # Ha sequential mode be van kapcsolva, sorban megyünk!
@@ -190,39 +230,60 @@ class RosLineFollowEnv(gym.Env, Node):
         # First time setup
         if not self.initial_setup_done:
             self.get_logger().info("Initial setup: Spawning track line and robot...")
-            self.gazebo_manager.respawn_robot(self.SPAWN_X, self.SPAWN_Y, self.current_camera_pitch)
+            
+            # Initial track direction calculus
+            initial_yaw = -3.14
+            if len(self.TRACK_POINTS) >= 2:
+                dx = self.TRACK_POINTS[1][0] - self.TRACK_POINTS[0][0]
+                dy = self.TRACK_POINTS[1][1] - self.TRACK_POINTS[0][1]
+                import math
+                initial_yaw = math.atan2(dy, dx)
+
+            self.gazebo_manager.respawn_robot(self.SPAWN_X, self.SPAWN_Y, self.current_camera_pitch, yaw=initial_yaw)
             self.gazebo_manager.respawn_line(self.TRACK_POINTS, self.SPLINE_RESOLUTION, self.current_line_width)
             self.initial_setup_done = True
-            time.sleep(0.5)  # Wait for line to appear
+            self.spin_sleep(0.1)  # Gyorsított várakozás
+            
+            # Várjunk a legelső kameraképre (GUI / Látható módozatban lassan tölt be a Gazebo Camera Plugin)
+            self.get_logger().info("Élő kameraképre várakozás a Gazebotól (GUI init)...")
+            wait_start = time.time()
+            while self.latest_image is None and (time.time() - wait_start) < 30.0:
+                rclpy.spin_once(self, timeout_sec=0.05)
+                
             return
             
-        # CRITICAL FIX for Gazebo Exit Code -11 Segfault:
-        # First lift the robot up in the air so it is NOT touching the floor.
-        # This prevents the ODE physics engine from experiencing infinite collision forces when the track (kinematic object) is teleported under it!
-        self.gazebo_manager.reset_robot_position(self.SPAWN_X, self.SPAWN_Y)
-        
         # CRITICAL FIX for GPU/OGRE Exit Code -11 Segfaults:
         # DO NOT use pause_physics() as it deadlocks with hardware acceleration.
         # DO NOT teleport visual tracks while the camera is pointed at them (causes Scene BVH crashes).
         # SOLUTION: "Szemeltakarás". Teleport the robot far away into empty space first!
         self.gazebo_manager.reset_robot_position(500.0, 500.0) # Park robot far away and fall in empty space
-        time.sleep(0.2) # Let the camera render empty frames
+        self.spin_sleep(0.05) # Nagyon gyors várakozás kamera miatt
         
         # Move the kinematic tracks around while the camera isn't looking at them!
         if track_changed:
             self.get_logger().info(f"Selected predefined track finish line at ({self.FINISH_X}, {self.FINISH_Y})")
             self.gazebo_manager.respawn_line(self.TRACK_POINTS, self.SPLINE_RESOLUTION, self.current_line_width)
-            time.sleep(0.3)
+            self.spin_sleep(0.1)
         
-        # Bring the robot back and drop it properly at the start frame
-        success = self.gazebo_manager.reset_robot_position(self.SPAWN_X, self.SPAWN_Y)
-        time.sleep(0.3)
-
-        if not success:
-            self.gazebo_manager.respawn_robot(self.SPAWN_X, self.SPAWN_Y, self.current_camera_pitch)
+        # Calculate the direction of the track from starting point to the next point
+        start_yaw = -3.14  # Default
+        if len(self.TRACK_POINTS) >= 2:
+            dx = self.TRACK_POINTS[1][0] - self.TRACK_POINTS[0][0]
+            dy = self.TRACK_POINTS[1][1] - self.TRACK_POINTS[0][1]
+            import math
+            start_yaw = math.atan2(dy, dx)
+        
+        # Bring the robot back and drop it properly at the start frame (Teleport)
+        if hasattr(self.gazebo_manager, 'reset_robot_position'):
+            success = self.gazebo_manager.reset_robot_position(self.SPAWN_X, self.SPAWN_Y, yaw=start_yaw)
+            if not success:
+                self.gazebo_manager.respawn_robot(self.SPAWN_X, self.SPAWN_Y, getattr(self, 'current_camera_pitch', 0.0), yaw=start_yaw)
+        else:
+            self.gazebo_manager.respawn_robot(self.SPAWN_X, self.SPAWN_Y, getattr(self, 'current_camera_pitch', 0.0), yaw=start_yaw)
+        self.spin_sleep(0.05)
         
         # Minimális szünet teleport után, nehogy még esésben lévő/rossz pozíciót kapjon lencsevégre a kamera
-        time.sleep(0.1)
+        self.spin_sleep(0.05)
 
     def _get_obs(self):
         if self.latest_image is None:
@@ -245,30 +306,32 @@ class RosLineFollowEnv(gym.Env, Node):
 
     def step(self, action):
         # 1. Send action to the robot
-        # Scale down actions so the robot moves slower physically while satisfying
-        # the neural network's original trained action space scale.
-        # Max original speed 0.5 -> scaled to 0.3 (60%)
-        # Max original turn 1.5 -> scaled to 1.3 (86.6%) - Megemelve, hogy fizikailag jobban tudjon kanyarodni!
+        # Scale down actions so the robot moves physically differently depending on the reward_mode
+        # while satisfying the neural network's original trained action space scale.
         twist = Twist()
         base_linear = float(action[0])
         base_angular = float(action[1])
         
-        linear_speed = base_linear * (0.3 / 0.4)
+        # A maximális lineáris sebességet a beállított fizikai határhoz skálázzuk
+        # Ez stabilabb mozgást biztosít vizuális (kamerás) módban!
+        linear_speed = base_linear * (self.phys_max_linear / self.max_speed)
+        
         # Dinamikus kormányszorzó a vonal területe alapján (Kanyar-asszisztens)
-        # Ha a terület "nagy" (>4000), ez egyenes. Szorzó = 1.0
-        # Ha a terület lecsökken (kanyar, <2000), a szorzó megnő (akár 1.6x-osra)
+        # Koordináta módban ezt teljesen kikapcsoljuk, mert a hirtelen 50%-os megugrások 
+        # rontják az RL Markov tulajdonságát és folyamatos túlkormányzást (cikázást) okoznak!
         area_multiplier = 1.0
-        if hasattr(self, 'last_line_area') and self.last_line_area > 0:
+        if self.reward_mode != 'coordinate' and hasattr(self, 'last_line_area') and self.last_line_area > 0:
             if self.last_line_area < 2500:
-                area_multiplier = 1.5  # Erős boost kanyarban
+                area_multiplier = 1.5  # Erős boost kanyarban (csak Vision módban)
             elif self.last_line_area < 3500:
                 area_multiplier = 1.25 # Enyhe boost
                 
         # Base multiplier and dynamic area multiplier
-        angular_speed = base_angular * (1.3 / 1.5) * area_multiplier
+        # Csökkentett érték, hogy vision módban a robot finomabb, többszöri kis korrekciókkal kanyarodjon
+        angular_speed = base_angular * (self.phys_max_angular / self.max_turn) * area_multiplier
         
-        # Fizikai plafon, nehogy túlpörögjön a szervó:
-        angular_speed = max(min(angular_speed, 1.8), -1.8)
+        # Fizikai plafon szigorítása vision módban, hogy véletlenül se "rántson" egy hatalmasat 
+        angular_speed = max(min(angular_speed, self.phys_angular_clip), -self.phys_angular_clip)
         
         twist.linear.x = linear_speed
         twist.angular.z = angular_speed
@@ -346,9 +409,8 @@ class RosLineFollowEnv(gym.Env, Node):
         # Stop the robot
         self.publisher_.publish(Twist())
         
-        import time
-        # Vizuális szünet az epizódok között, hogy jól látszódjon a végeredmény (esés vagy győzelem)
-        time.sleep(0.5)
+        # Vizuális szünet az epizódok között drasztikusan lecsökkentve gyorsításhoz
+        self.spin_sleep(0.05)
         
         # Reset finish line state
         self.finished = False

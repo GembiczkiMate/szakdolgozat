@@ -1,7 +1,7 @@
 import math
 
 class CoordinateProcessor:
-    def __init__(self, max_allowed_deviation_meters=0.4):
+    def __init__(self, max_allowed_deviation_meters=0.35):
         self.spline_points = []
         self.max_allowed_deviation = max_allowed_deviation_meters
         
